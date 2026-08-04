@@ -5,6 +5,8 @@
 
 import http from 'node:http';
 import https from 'node:https';
+import net from 'node:net';
+import tls from 'node:tls';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -122,7 +124,7 @@ export function createProxyServer({ config, secrets, logger = console }) {
           });
           return;
         }
-        forwardToUpstream(req, res, body, model, route, secrets, logger);
+        forwardToUpstream(req, res, body, model, route, secrets, logger, config);
       });
       return;
     }
@@ -176,7 +178,55 @@ function readJsonBody(req, callback) {
   req.on('error', (err) => finish(err));
 }
 
-function forwardToUpstream(req, res, body, slug, route, secrets, logger) {
+function createProxyAgent(proxyUrl) {
+  const agent = new https.Agent({ keepAlive: false });
+  agent.createConnection = (options, callback) => {
+    let done = false;
+    let connected = false;
+    const finish = (err, socket) => {
+      if (!done) {
+        done = true;
+        callback(err, socket);
+      }
+    };
+    let proxyUrlObj;
+    try {
+      proxyUrlObj = new URL(proxyUrl);
+    } catch (err) {
+      finish(err);
+      return;
+    }
+    const targetHost = options.host || options.servername || '';
+    const targetPort = options.port || 443;
+    const socket = net.connect(Number(proxyUrlObj.port || 80), proxyUrlObj.hostname);
+    socket.on('connect', () => {
+      socket.write(`CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n\r\n`);
+    });
+    let buf = '';
+    const onData = (chunk) => {
+      if (done || connected) return;
+      buf += chunk.toString('latin1');
+      const idx = buf.indexOf('\r\n\r\n');
+      if (idx === -1) return;
+      const head = buf.slice(0, idx);
+      if (!/^HTTP\/1\.[01] 200/.test(head)) {
+        socket.destroy();
+        finish(new Error(`proxy CONNECT failed: ${head.split('\r\n')[0]}`));
+        return;
+      }
+      connected = true;
+      socket.removeListener('data', onData);
+      const tlsSocket = tls.connect({ socket, servername: targetHost });
+      tlsSocket.once('secureConnect', () => finish(null, tlsSocket));
+      tlsSocket.once('error', finish);
+    };
+    socket.on('data', onData);
+    socket.on('error', finish);
+  };
+  return agent;
+}
+
+function forwardToUpstream(req, res, body, slug, route, secrets, logger, config) {
   const apiKey = secrets[route.api_key_env];
   if (!apiKey) {
     sendJson(res, 500, {
@@ -193,15 +243,31 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger) {
     return;
   }
   const lib = upstreamUrl.protocol === 'https:' ? https : http;
+  const agent = upstreamUrl.protocol === 'https:' && config.proxy ? createProxyAgent(config.proxy) : undefined;
   const upstreamBody = JSON.stringify({ ...body, model: route.upstream_model });
-  const headers = {
-    'content-type': req.headers['content-type'] || 'application/json',
-    accept: req.headers.accept || 'application/json',
-    authorization: `Bearer ${apiKey}`,
-    'user-agent': 'codexmodelproxy/1.0',
-    'content-length': Buffer.byteLength(upstreamBody),
-  };
-  const outgoing = lib.request(upstreamUrl, { method: 'POST', headers }, (upRes) => {
+  // 尽量原样转发客户端请求头（与 Codex 直连上游时看到的请求一致），
+  // 只替换鉴权与 content-length，并剔除逐跳头。
+  const headers = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    const lower = key.toLowerCase();
+    if (
+      lower === 'host' ||
+      lower === 'authorization' ||
+      lower === 'content-length' ||
+      HOP_BY_HOP_HEADERS.has(lower)
+    ) {
+      continue;
+    }
+    headers[key] = value;
+  }
+  headers.authorization = `Bearer ${apiKey}`;
+  headers['content-length'] = Buffer.byteLength(upstreamBody);
+  if (!headers['content-type']) headers['content-type'] = 'application/json';
+  if (!headers.accept) headers.accept = 'application/json';
+  if (!headers['user-agent']) headers['user-agent'] = 'codexmodelproxy/1.0';
+  const requestOptions = { method: 'POST', headers };
+  if (agent) requestOptions.agent = agent;
+  const outgoing = lib.request(upstreamUrl, requestOptions, (upRes) => {
     const status = upRes.statusCode || 502;
     const outHeaders = {};
     for (const [key, value] of Object.entries(upRes.headers)) {

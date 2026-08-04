@@ -45,6 +45,10 @@ codex exec -m gpt-5.6-terra "提示词"
 | `models_unified.json` | Codex 统一模型目录，由全局配置用绝对路径引用 |
 | `test/proxy.test.mjs` | 自动测试（使用内存 mock 上游，不消耗真实额度） |
 
+## 代理设置
+
+`proxy-config.json` 中的 `proxy` 字段指定上游请求要走的本地代理（默认 `http://127.0.0.1:7890`，与本机 FlClash 系统代理一致）。OpenCode 会对直连出口做区域限制（返回 403“This model is not available in your region.”），必须走本地代理才能正常使用；DeepSeek 走不走代理均可。若你的代理端口不同，修改该字段即可；不需要代理时删除该字段。
+
 ## 测试
 
 ```text
