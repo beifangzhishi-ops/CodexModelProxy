@@ -1,0 +1,17 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "pid_file": "proxy.pid",
+  "models": {
+    "gpt-5.6-luna": {
+      "upstream_base_url": "https://opencode.ai/zen/go/v1",
+      "upstream_model": "gpt-5.6-luna",
+      "api_key_env": "OPENCODE_API_KEY"
+    },
+    "gpt-5.6-terra": {
+      "upstream_base_url": "https://api.deepseek.com/",
+      "upstream_model": "deepseek-v4-flash",
+      "api_key_env": "DEEPSEEK_API_KEY"
+    }
+  }
+}

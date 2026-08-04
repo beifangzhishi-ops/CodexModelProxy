@@ -1,0 +1,5 @@
+proxy-secrets.env
+proxy.pid
+proxy.log
+proxy.err.log
+node_modules/
