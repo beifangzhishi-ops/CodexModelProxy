@@ -42,7 +42,7 @@ export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT
   if (!config.models || typeof config.models !== 'object' || Array.isArray(config.models)) {
     throw new Error('proxy-config.json 缺少 models 对象');
   }
-  for (const slug of ['gpt-5.6-luna', 'gpt-5.6-sol']) {
+  for (const slug of ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol']) {
     if (!config.models[slug]) {
       throw new Error(`路由缺少模型：${slug}`);
     }
