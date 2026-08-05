@@ -4,8 +4,8 @@
 
 | Codex slug | 显示名 | 上游 |
 |---|---|---|
-| `gpt-5.6-luna` | GPT-5.6 Luna | OpenCode（`gpt-5.6-luna`） |
-| `gpt-5.6-terra` | DeepSeek-V4-Flash | DeepSeek（`deepseek-v4-flash`） |
+| `gpt-5.6-luna` | DeepSeek-V4-Flash | DeepSeek（`deepseek-v4-flash`） |
+| `gpt-5.6-sol` | ds flash opencode | OpenCode（`deepseek-v4-flash`） |
 
 服务只做路由转发，不转换协议（统一使用 Responses API），不记录提示词、响应正文和 API 密钥；未知模型直接返回错误，不会访问上游。
 
@@ -32,7 +32,7 @@ CLI 单独指定模型（不改全局配置）：
 
 ```text
 codex exec -m gpt-5.6-luna "提示词"
-codex exec -m gpt-5.6-terra "提示词"
+codex exec -m gpt-5.6-sol "提示词"
 ```
 
 ## 文件说明

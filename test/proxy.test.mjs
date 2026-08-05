@@ -10,13 +10,13 @@ function testRoutes(mockBaseUrl) {
   return {
     'gpt-5.6-luna': {
       upstream_base_url: mockBaseUrl,
-      upstream_model: 'gpt-5.6-luna',
-      api_key_env: 'OPENCODE_API_KEY',
-    },
-    'gpt-5.6-terra': {
-      upstream_base_url: mockBaseUrl,
       upstream_model: 'deepseek-v4-flash',
       api_key_env: 'DEEPSEEK_API_KEY',
+    },
+    'gpt-5.6-sol': {
+      upstream_base_url: mockBaseUrl,
+      upstream_model: 'deepseek-v4-flash',
+      api_key_env: 'OPENCODE_API_KEY',
     },
   };
 }
@@ -103,31 +103,31 @@ test('健康检查与模型列表', async () => {
     const modelsJson = await modelsRes.json();
     assert.deepEqual(
       modelsJson.data.map((m) => m.id).sort(),
-      ['gpt-5.6-luna', 'gpt-5.6-terra'],
+      ['gpt-5.6-luna', 'gpt-5.6-sol'],
     );
   });
 });
 
-test('Luna 与 Terra 各自转发到正确上游且不串路由', async () => {
+test('Luna 与 Sol 各自转发到正确上游且不串路由', async () => {
   await withServers(async (mock, proxy) => {
     const r1 = await postJson(proxy.baseUrl, '/v1/responses', { model: 'gpt-5.6-luna', input: '你好' });
     assert.equal(r1.status, 200);
-    const r2 = await postJson(proxy.baseUrl, '/v1/responses', { model: 'gpt-5.6-terra', input: '你好' });
+    const r2 = await postJson(proxy.baseUrl, '/v1/responses', { model: 'gpt-5.6-sol', input: '你好' });
     assert.equal(r2.status, 200);
 
     assert.equal(mock.seen.length, 2);
     assert.equal(mock.seen[0].url, '/responses');
-    assert.equal(mock.seen[0].auth, 'Bearer test-open-key');
-    assert.equal(mock.seen[0].body.model, 'gpt-5.6-luna');
+    assert.equal(mock.seen[0].auth, 'Bearer test-deep-key');
+    assert.equal(mock.seen[0].body.model, 'deepseek-v4-flash');
     assert.equal(mock.seen[1].url, '/responses');
-    assert.equal(mock.seen[1].auth, 'Bearer test-deep-key');
+    assert.equal(mock.seen[1].auth, 'Bearer test-open-key');
     assert.equal(mock.seen[1].body.model, 'deepseek-v4-flash');
   });
 });
 
 test('未知模型返回 4xx 且不访问上游', async () => {
   await withServers(async (mock, proxy) => {
-    const r = await postJson(proxy.baseUrl, '/v1/responses', { model: 'gpt-5.6-sol', input: '你好' });
+    const r = await postJson(proxy.baseUrl, '/v1/responses', { model: 'gpt-5.6-terra', input: '你好' });
     assert.equal(r.status, 400);
     assert.match(r.text, /未知模型/);
     assert.equal(mock.seen.length, 0);
