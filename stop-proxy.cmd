@@ -11,9 +11,9 @@ set /p PID=<"%PIDFILE%"
 if not defined PID goto :byport
 powershell -NoProfile -Command "Stop-Process -Id %PID% -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 300"
 del /q "%PIDFILE%" >nul 2>nul
-echo [codex-proxy] å·²åœæ­¢è¿›ç¨‹ PID=%PID%
+echo [codex-proxy] ÒÑÍ£Ö¹½ø³Ì PID=%PID%
 exit /b 0
 
 :byport
-powershell -NoProfile -Command "$c=Get-NetTCPConnection -LocalPort 8787 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if ($c) { Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue; Write-Output ('å·²æŒ‰ç«¯å£ 8787 åœæ­¢è¿›ç¨‹ PID=' + $c.OwningProcess) } else { Write-Output 'æœªå‘ç°ç›‘å¬ 8787 çš„ä¸­è½¬è¿›ç¨‹' }"
+powershell -NoProfile -Command "$c=Get-NetTCPConnection -LocalPort 8787 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if ($c) { Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue; Write-Output ('ÒÑ°´¶Ë¿Ú 8787 Í£Ö¹½ø³Ì PID=' + $c.OwningProcess) } else { Write-Output 'Î´·¢ÏÖ¼àÌı 8787 µÄÖĞ×ª½ø³Ì' }"
 exit /b %errorlevel%

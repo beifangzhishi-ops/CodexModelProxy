@@ -4,24 +4,25 @@ cd /d "%~dp0"
 
 where node >nul 2>nul
 if errorlevel 1 (
-  echo [codex-proxy] æœªæ‰¾åˆ° nodeï¼Œè¯·å…ˆå®‰è£… Node.js å¹¶åŠ å…¥ PATHã€‚
+  echo [codex-proxy] Î´ÕÒµ½ node£¬ÇëÏÈ°²×° Node.js ²¢¼ÓÈë PATH¡£
   exit /b 1
 )
 
 if not exist "proxy-secrets.env" (
-  echo [codex-proxy] ç¼ºå°‘ proxy-secrets.envï¼Œè¯·å…ˆå¡«å†™ OPENCODE_API_KEY ä¸Ž DEEPSEEK_API_KEYã€‚
+  echo [codex-proxy] È±ÉÙ proxy-secrets.env£¬ÇëÏÈÌîÐ´ OPENCODE_API_KEY Óë DEEPSEEK_API_KEY¡£
   exit /b 1
 )
 
-powershell -NoProfile -Command "$c=Get-Content -LiteralPath 'proxy-secrets.env' -Raw -ErrorAction SilentlyContinue; if(-not ($c -match '(?m)^OPENCODE_API_KEY\s*=.*\S') -or -not ($c -match '(?m)^DEEPSEEK_API_KEY\s*=.*\S')){ Write-Error 'proxy-secrets.env ç¼ºå°‘ OPENCODE_API_KEY æˆ– DEEPSEEK_API_KEY'; exit 1 }"
+powershell -NoProfile -Command "$c=Get-Content -LiteralPath 'proxy-secrets.env' -Raw -ErrorAction SilentlyContinue; if(-not ($c -match '(?m)^OPENCODE_API_KEY\s*=.*\S') -or -not ($c -match '(?m)^DEEPSEEK_API_KEY\s*=.*\S')){ Write-Error 'proxy-secrets.env È±ÉÙ OPENCODE_API_KEY »ò DEEPSEEK_API_KEY'; exit 1 }"
 if errorlevel 1 exit /b 1
 
 powershell -NoProfile -Command "try { $r=Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8787/healthz' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }"
 if %errorlevel% equ 0 (
-  echo [codex-proxy] ä¸­è½¬å·²åœ¨è¿è¡Œï¼šhttp://127.0.0.1:8787
+  echo [codex-proxy] ÖÐ×ªÒÑÔÚÔËÐÐ£ºhttp://127.0.0.1:8787
   exit /b 0
 )
 
-echo [codex-proxy] å¯åŠ¨ä¸­è½¬æœåŠ¡ï¼ˆæŒ‰ Ctrl+C æˆ–è¿è¡Œ stop-proxy.cmd åœæ­¢ï¼‰...
-node server.mjs
+echo [codex-proxy] ÕýÔÚºóÌ¨Æô¶¯ÖÐ×ª·þÎñ£¨ÈÕÖ¾¼û proxy.log / proxy.err.log£©...
+powershell -NoProfile -Command "$ws=New-Object -ComObject WScript.Shell; $null = $ws.Run('cmd /c cd /d ""%~dp0"" && node server.mjs > proxy.log 2> proxy.err.log', 0, $false)"
+powershell -NoProfile -Command "Start-Sleep -Seconds 2; try { $r=Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8787/healthz' -TimeoutSec 5; Write-Output ('[codex-proxy] ÒÑÆô¶¯£ºhttp://127.0.0.1:8787  PID=' + (Get-Content -LiteralPath '%~dp0proxy.pid' -ErrorAction SilentlyContinue)) } catch { Write-Output ('[codex-proxy] Æô¶¯Ê§°Ü£¬Çë²é¿´ proxy.err.log£º' + $_.Exception.Message); exit 1 }"
 exit /b %errorlevel%
