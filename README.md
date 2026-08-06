@@ -8,6 +8,7 @@
 | `gpt-5.6-terra` | DeepSeek-V4-Flash | DeepSeek（`deepseek-v4-flash`） |
 | `gpt-5.6-sol` | ds flash opencode | OpenCode（`deepseek-v4-flash`） |
 
+注意这里的sol和terra是假名，真值是flash。用户要用sol/terra的时候不要用这个通道。
 服务只做路由转发，不转换协议（统一使用 Responses API），不记录提示词、响应正文和 API 密钥；未知模型直接返回错误，不会访问上游。
 
 ## 快速开始
