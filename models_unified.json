@@ -106,8 +106,8 @@
       "comp_hash": "3000",
       "reasoning_summary_format": "experimental",
       "default_reasoning_summary": "none",
-      "display_name": "DeepSeek-V4-Flash",
-      "description": "DeepSeek-V4-Flash 0731 正式版（原生支持 Responses API，适配 Codex）。",
+      "display_name": "DeepSeek-V4-Pro",
+      "description": "DeepSeek-V4-Pro 0731 正式版（原生支持 Responses API，适配 Codex）。",
       "default_reasoning_level": "high",
       "supported_reasoning_levels": [
         {

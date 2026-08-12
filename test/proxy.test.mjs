@@ -15,7 +15,7 @@ function testRoutes(mockBaseUrl) {
     },
     'gpt-5.6-terra': {
       upstream_base_url: mockBaseUrl,
-      upstream_model: 'deepseek-v4-flash',
+      upstream_model: 'deepseek-v4-pro',
       api_key_env: 'DEEPSEEK_API_KEY',
     },
     'gpt-5.6-sol': {
@@ -131,7 +131,7 @@ test('Luna、Terra 与 Sol 各自转发到正确上游且不串路由', async ()
     assert.equal(mock.seen[1].body.model, 'deepseek-v4-flash');
     assert.equal(mock.seen[2].url, '/responses');
     assert.equal(mock.seen[2].auth, 'Bearer test-deep-key');
-    assert.equal(mock.seen[2].body.model, 'deepseek-v4-flash');
+    assert.equal(mock.seen[2].body.model, 'deepseek-v4-pro');
   });
 });
 

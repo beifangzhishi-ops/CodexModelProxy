@@ -5,10 +5,10 @@
 | Codex slug | 显示名 | 上游 |
 |---|---|---|
 | `gpt-5.6-luna` | GPT-5.6 Luna | OpenCode（`gpt-5.6-luna`） |
-| `gpt-5.6-terra` | DeepSeek-V4-Flash | DeepSeek（`deepseek-v4-flash`） |
+| `gpt-5.6-terra` | DeepSeek-V4-Pro | DeepSeek（`deepseek-v4-pro`，Responses API） |
 | `gpt-5.6-sol` | ds flash opencode | OpenCode（`deepseek-v4-flash`） |
 
-注意这里的sol和terra是假名，真值是flash。用户要用sol/terra的时候不要用这个通道。
+注意这里的 sol 和 terra 是代理内的显示别名：terra 连接 DeepSeek 官方 `deepseek-v4-pro` Responses API，sol 连接 OpenCode 的 `deepseek-v4-flash`。两者均不改变请求协议。
 服务只做路由转发，不转换协议（统一使用 Responses API），不记录提示词、响应正文和 API 密钥；未知模型直接返回错误，不会访问上游。
 
 ## 快速开始
