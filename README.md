@@ -30,7 +30,7 @@ Codex 的模型下拉列表只展示 GPT 系列模型，第三方模型（如 De
 6. 按下方“Codex 配置字段教程”修改本机 Codex 全局配置。
 7. 重新加载 Codex 配置与模型目录。
 
-以后更新：`git pull` 后先运行 `stop-proxy.cmd`，再运行 `start-proxy.cmd`。
+以后更新：先执行 `git pull` 拉取最新代码，然后提醒用户手动重启中转（先运行 `stop-proxy.cmd`，再运行 `start-proxy.cmd`）；更新过程中不要自动重启服务，重启时机由用户决定。
 
 > 注意：代理本身就是 Codex 正在使用的通信通道。如果当前 Codex 正通过本中转（`base_url` 指向本代理），运行 `stop-proxy.cmd` 会让正在进行的会话立即断连。停止或重启代理前，请先切换到直连配置（例如 Codex 全局配置目录中的 OpenCode 直连或 DeepSeek 直连），操作完成后再切回统一中转。
 
