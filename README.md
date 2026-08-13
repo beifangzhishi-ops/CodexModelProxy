@@ -16,6 +16,10 @@ Codex 的模型下拉列表只展示 GPT 系列模型，第三方模型（如 De
 
 服务只做路由转发；不记录提示词、响应正文和 API 密钥；未知模型直接返回错误，不会访问上游。
 
+## 图片上传
+
+`models_unified.json` 中三个别名均声明 `input_modalities: ["text", "image"]` 与 `supports_image_detail_original: true`，因此桌面端允许上传图片；能否真正识别图片取决于上游模型是否支持图片输入。若某个上游不接受图片，请把对应别名的 `input_modalities` 改回 `["text"]`。
+
 ## 快速开始（每台机器各执行一次）
 
 1. 安装 Node.js（本项目只用内置模块，无需安装任何依赖）。
