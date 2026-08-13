@@ -67,6 +67,10 @@ export function loadSecrets(secretsFile = process.env.PROXY_SECRETS_FILE || DEFA
   try {
     raw = fs.readFileSync(secretsFile, 'utf8');
   } catch (err) {
+    if (err.code === 'ENOENT') {
+      // 密钥文件不存在时允许纯环境变量注入，由启动时的缺失检查统一处理
+      return secrets;
+    }
     throw new Error(`无法读取密钥文件：${secretsFile}（${err.message}）`);
   }
   for (const line of raw.split(/\r?\n/)) {
@@ -84,14 +88,30 @@ export function loadSecrets(secretsFile = process.env.PROXY_SECRETS_FILE || DEFA
   return secrets;
 }
 
-export function createProxyServer({ config, secrets, logger = console }) {
+export function createProxyServer({ config, secrets, logger = console, env = process.env }) {
   const routes = config.models || {};
+  const accessToken = (env.PROXY_ACCESS_TOKEN || config.access_token || '').trim();
+  const proxyUrl = env.PROXY_URL || config.proxy || '';
+  const requireToken = accessToken.length > 0;
+
+  function isAuthorized(req) {
+    if (!requireToken) return true;
+    return safeEqual(req.headers.authorization || '', `Bearer ${accessToken}`);
+  }
+
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
     const pathname = url.pathname;
 
     if (req.method === 'GET' && pathname === '/healthz') {
       sendJson(res, 200, { status: 'ok' });
+      return;
+    }
+
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, {
+        error: { type: 'authentication_error', message: '未授权：缺少或错误的访问令牌' },
+      });
       return;
     }
 
@@ -124,7 +144,7 @@ export function createProxyServer({ config, secrets, logger = console }) {
           });
           return;
         }
-        forwardToUpstream(req, res, body, model, route, secrets, logger, config);
+        forwardToUpstream(req, res, body, model, route, secrets, logger, proxyUrl, env);
       });
       return;
     }
@@ -132,6 +152,17 @@ export function createProxyServer({ config, secrets, logger = console }) {
     sendJson(res, 404, { error: { type: 'not_found', message: '未找到该路径' } });
   });
   return server;
+}
+
+function safeEqual(a, b) {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  const len = Math.max(bufA.length, bufB.length);
+  let diff = bufA.length ^ bufB.length;
+  for (let i = 0; i < len; i++) {
+    diff |= (bufA[i] || 0) ^ (bufB[i] || 0);
+  }
+  return diff === 0;
 }
 
 function sendJson(res, status, payload) {
@@ -226,8 +257,8 @@ function createProxyAgent(proxyUrl) {
   return agent;
 }
 
-function forwardToUpstream(req, res, body, slug, route, secrets, logger, config) {
-  const apiKey = secrets[route.api_key_env];
+function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUrl, env) {
+  const apiKey = env[route.api_key_env] || secrets[route.api_key_env];
   if (!apiKey) {
     sendJson(res, 500, {
       error: { type: 'server_error', message: `缺少上游密钥：${route.api_key_env}` },
@@ -243,7 +274,7 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, config)
     return;
   }
   const lib = upstreamUrl.protocol === 'https:' ? https : http;
-  const agent = upstreamUrl.protocol === 'https:' && config.proxy ? createProxyAgent(config.proxy) : undefined;
+  const agent = upstreamUrl.protocol === 'https:' && proxyUrl ? createProxyAgent(proxyUrl) : undefined;
   const upstreamBody = JSON.stringify({ ...body, model: route.upstream_model });
   // 尽量原样转发客户端请求头（与 Codex 直连上游时看到的请求一致），
   // 只替换鉴权与 content-length，并剔除逐跳头。
@@ -311,6 +342,7 @@ function isMain() {
 }
 
 if (isMain()) {
+  const env = process.env;
   let config;
   let secrets;
   try {
@@ -322,17 +354,17 @@ if (isMain()) {
   }
   const missingKeys = [...new Set(
     Object.values(config.models)
-      .filter((route) => !secrets[route.api_key_env])
+      .filter((route) => !(env[route.api_key_env] || secrets[route.api_key_env]))
       .map((route) => route.api_key_env),
   )];
   if (missingKeys.length > 0) {
-    console.error(`[codex-proxy] 启动失败：proxy-secrets.env 缺少密钥（${missingKeys.join('、')}）`);
+    console.error(`[codex-proxy] 启动失败：缺少密钥（${missingKeys.join('、')}），请在 proxy-secrets.env 或环境变量中提供`);
     process.exit(1);
   }
-  const host = config.host || '127.0.0.1';
-  const port = config.port ?? 8787;
+  const host = env.HOST || config.host || '127.0.0.1';
+  const port = Number(env.PORT) || (config.port ?? 8787);
   const pidFile = path.resolve(__dirname, config.pid_file || 'proxy.pid');
-  const server = createProxyServer({ config, secrets });
+  const server = createProxyServer({ config, secrets, env });
   server.on('error', (err) => {
     console.error(`[codex-proxy] 服务错误：${err.message}`);
     removePidFile(pidFile);

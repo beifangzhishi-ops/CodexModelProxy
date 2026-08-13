@@ -1,4 +1,5 @@
 proxy-secrets.env
+proxy-local.env
 proxy.pid
 proxy.log
 proxy.err.log

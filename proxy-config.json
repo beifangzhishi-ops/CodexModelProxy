@@ -2,7 +2,6 @@
   "host": "127.0.0.1",
   "port": 8787,
   "pid_file": "proxy.pid",
-  "proxy": "http://127.0.0.1:7890",
   "models": {
     "gpt-5.6-luna": {
       "upstream_base_url": "https://opencode.ai/zen/go/v1",

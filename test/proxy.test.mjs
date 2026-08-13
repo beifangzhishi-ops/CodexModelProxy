@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createProxyServer } from '../server.mjs';
+import { createProxyServer, loadSecrets } from '../server.mjs';
 
 const silentLogger = { info() {}, error() {}, warn() {} };
 
@@ -64,8 +64,8 @@ function startMockUpstream() {
   });
 }
 
-function startProxy(config, secrets) {
-  const server = createProxyServer({ config, secrets, logger: silentLogger });
+function startProxy(config, secrets, env = {}) {
+  const server = createProxyServer({ config, secrets, logger: silentLogger, env });
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
       resolve({ server, baseUrl: `http://127.0.0.1:${server.address().port}` });
@@ -73,14 +73,22 @@ function startProxy(config, secrets) {
   });
 }
 
-async function postJson(baseUrl, pathname, body) {
+async function postJson(baseUrl, pathname, body, auth) {
+  const headers = { 'content-type': 'application/json' };
+  if (auth) headers.authorization = auth;
   const res = await fetch(baseUrl + pathname, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   });
   const text = await res.text();
   return { status: res.status, headers: res.headers, text };
+}
+
+async function closeServers(...servers) {
+  for (const server of servers) {
+    await new Promise((resolve) => server.close(resolve));
+  }
 }
 
 async function withServers(fn) {
@@ -88,12 +96,12 @@ async function withServers(fn) {
   const proxy = await startProxy(
     { host: '127.0.0.1', port: 0, models: testRoutes(mock.baseUrl) },
     testSecrets(),
+    {},
   );
   try {
     await fn(mock, proxy);
   } finally {
-    await new Promise((r) => proxy.server.close(r));
-    await new Promise((r) => mock.server.close(r));
+    await closeServers(proxy.server, mock.server);
   }
 }
 
@@ -158,4 +166,72 @@ test('SSE 流式响应原样透传', async () => {
     assert.match(text, /response.completed/);
     assert.equal(mock.seen.length, 1);
   });
+});
+
+test('访问令牌：配置后无/错令牌 401，正确令牌放行，healthz 不校验', async () => {
+  const mock = await startMockUpstream();
+  const proxy = await startProxy(
+    { host: '127.0.0.1', port: 0, models: testRoutes(mock.baseUrl) },
+    testSecrets(),
+    { PROXY_ACCESS_TOKEN: 'secret-token' },
+  );
+  try {
+    const modelsNoAuth = await fetch(`${proxy.baseUrl}/v1/models`);
+    assert.equal(modelsNoAuth.status, 401);
+
+    const respNoAuth = await postJson(proxy.baseUrl, '/v1/responses', {
+      model: 'gpt-5.6-luna',
+      input: '你好',
+    });
+    assert.equal(respNoAuth.status, 401);
+
+    const respWrong = await postJson(
+      proxy.baseUrl,
+      '/v1/responses',
+      { model: 'gpt-5.6-luna', input: '你好' },
+      'Bearer wrong-token',
+    );
+    assert.equal(respWrong.status, 401);
+    assert.equal(mock.seen.length, 0);
+
+    const modelsOk = await fetch(`${proxy.baseUrl}/v1/models`, {
+      headers: { authorization: 'Bearer secret-token' },
+    });
+    assert.equal(modelsOk.status, 200);
+
+    const respOk = await postJson(
+      proxy.baseUrl,
+      '/v1/responses',
+      { model: 'gpt-5.6-luna', input: '你好' },
+      'Bearer secret-token',
+    );
+    assert.equal(respOk.status, 200);
+    assert.equal(mock.seen.length, 1);
+
+    const health = await fetch(`${proxy.baseUrl}/healthz`);
+    assert.equal(health.status, 200);
+  } finally {
+    await closeServers(mock.server, proxy.server);
+  }
+});
+
+test('密钥解析：进程环境变量优先于密钥文件', async () => {
+  const mock = await startMockUpstream();
+  const proxy = await startProxy(
+    { host: '127.0.0.1', port: 0, models: testRoutes(mock.baseUrl) },
+    { OPENCODE_API_KEY: 'file-open-key', DEEPSEEK_API_KEY: 'file-deep-key' },
+    { OPENCODE_API_KEY: 'env-open-key', DEEPSEEK_API_KEY: 'env-deep-key' },
+  );
+  try {
+    await postJson(proxy.baseUrl, '/v1/responses', { model: 'gpt-5.6-luna', input: '你好' });
+    await postJson(proxy.baseUrl, '/v1/responses', { model: 'gpt-5.6-terra', input: '你好' });
+    assert.equal(mock.seen[0].auth, 'Bearer env-open-key');
+    assert.equal(mock.seen[1].auth, 'Bearer env-deep-key');
+  } finally {
+    await closeServers(mock.server, proxy.server);
+  }
+});
+
+test('密钥文件缺失时返回空对象', () => {
+  assert.deepEqual(loadSecrets('./__missing_secrets_never_exists__.env'), {});
 });
