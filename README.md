@@ -41,7 +41,7 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 3. 复制 `proxy-secrets.env.example` 为 `proxy-secrets.env`，填写 `OPENCODE_API_KEY` 与 `DEEPSEEK_API_KEY`。该文件已被 Git 忽略，不会提交，各机器填各自的密钥。
 4. 若上游需要走代理（OpenCode 有区域限制，一般需要本机代理），复制 `proxy-local.env.example` 为 `proxy-local.env`，按本机代理端口修改 `PROXY_URL`；不需要代理时把值留空。启用本地访问令牌时在此文件加 `PROXY_ACCESS_TOKEN=...`。
 5. 双击或运行 `start-proxy.cmd` 启动中转。浏览器打开 `http://127.0.0.1:8787/healthz`，应返回 `{"status":"ok"}`。
-6. 按下方“Codex 配置”修改本机 Codex 备用配置。
+6. 按下方“Codex 配置”准备三处文件并运行切换脚本。
 7. 重新加载 Codex 配置与模型目录（模型目录缓存到 App Server 重启后刷新）。
 
 以后更新：先执行 `git pull` 拉取最新代码，然后提醒用户手动重启中转（先运行 `stop-proxy.cmd`，再运行 `start-proxy.cmd`）；更新过程中不要自动重启服务，重启时机由用户决定。
@@ -50,12 +50,17 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 
 ## Codex 配置
 
-在 Codex 全局配置目录（通常是 `%USERPROFILE%\.codex`）的备用配置 `config_unified.toml` 中配置以下字段（活动 `config.toml` 不修改）：
+统一配置涉及三处文件：仓库内的 `proxy-secrets.env` 与 `proxy-local.env` 保存本机差异，`C:\Users\noha\.codex\config_unified.toml` 是 Codex 的备用统一配置模板。
+
+1. `proxy-secrets.env`：填写 `OPENCODE_API_KEY` 与 `DEEPSEEK_API_KEY`，两个 OC 路由和两个直连 DeepSeek 路由分别使用它们。
+2. `proxy-local.env`：设置本机 `PROXY_URL`、`HOST`、`PORT`；启用本地访问令牌时加 `PROXY_ACCESS_TOKEN=...`，其值必须与下方 `http_headers` 中的一致。
+3. `config_unified.toml`（位于 `%USERPROFILE%\.codex`）：
 
 ```toml
 model_provider = "OpenAI"
 model = "deepseek-v4-flash"
 model_reasoning_effort = "max"
+forced_login_method = "chatgpt"
 model_catalog_json = "C:/你的克隆目录/CodexModelProxy/models_unified.json"
 
 [model_providers.OpenAI]
@@ -63,17 +68,27 @@ name = "unified"
 base_url = "http://127.0.0.1:8787/v1"
 wire_api = "responses"
 requires_openai_auth = true
+http_headers = { "X-Proxy-Access-Token" = "你的访问令牌" }
 ```
 
 说明：
 
 - `model`：默认模型 slug，可选上表任意一行；默认 `deepseek-v4-flash`。
-- `requires_openai_auth = true`：三个 GPT 路由需要 Codex 使用 ChatGPT 登录认证；OC 与直连路由的登录认证由代理替换为对应 API 密钥。
+- `forced_login_method`：需要 Codex 使用 ChatGPT 账号登录、访问三个 GPT-5.6 路由时写 `"chatgpt"`，登录完成后才能正常调用 GPT 模型；不需要登录账号、只用 OC 与直连 DeepSeek 四个路由时写 `"api"`。当前统一配置面向含 GPT 的场景，模板保留 `"chatgpt"`。
+- `requires_openai_auth = true`：让 Codex 使用 OpenAI 登录认证；三个 GPT 路由原样透传该认证，OC 与直连路由由代理替换为对应 API 密钥。
 - `base_url`：若通过 `proxy-local.env` 修改了 `PORT`，这里要同步修改端口。
 - `wire_api = "responses"`：Codex 自定义 Provider 目前唯一支持的协议。
-- 本地访问令牌：代理端使用 `X-Proxy-Access-Token` 请求头（避免与 ChatGPT 的 `Authorization` 冲突）。若在 `proxy-local.env` 启用了 `PROXY_ACCESS_TOKEN`，请在 Provider 区段加 `http_headers = { "X-Proxy-Access-Token" = "与代理端相同的令牌" }`；未启用时不需要该字段。
+- `http_headers`：`X-Proxy-Access-Token` 用于避免与 ChatGPT 的 `Authorization` 冲突，值必须与 `proxy-local.env` 中的 `PROXY_ACCESS_TOKEN` 一致；未启用访问令牌时删除该行。
 
-切换不同配置的脚本属于个人 Codex 目录，不在本仓库范围内。
+切换与生效：
+
+1. 启动代理：运行 `start-proxy.cmd`，浏览器打开 `http://127.0.0.1:8787/healthz`，应返回 `{"status":"ok"}`。
+2. 运行 `C:\Users\noha\.codex\config_unified.cmd`（个人目录的切换脚本，不在本仓库内）。
+3. 脚本只把模板中的模型、认证和 `[model_providers.OpenAI]` 区段写入活动 `config.toml`，桌面端、插件、MCP、项目权限等其他配置保留。
+4. 重启 Codex App Server 或重新加载配置，让启动时加载的模型目录刷新。
+5. 下拉列表应正好显示 7 个模型，默认模型为 `deepseek-v4-flash`。
+
+只修改 `config_unified.toml` 不会影响当前 Codex 配置；运行 `config_unified.cmd` 才会把模板写入活动 `config.toml`。切换失败时脚本不会替换当前 `config.toml`。
 
 ## 命令速查
 
@@ -134,7 +149,7 @@ node --test test\proxy.test.mjs test\compact-fallback.test.mjs
 - 端口被占用：在 `proxy-local.env` 中修改 `PORT`，并同步修改 Codex 配置 `base_url` 的端口。
 - OpenCode 返回 403 区域限制：确认 `proxy-local.env` 已配置 `PROXY_URL` 且本机代理正在运行。
 - 模型列表不对：确认 `model_catalog_json` 指向本机克隆目录的 `models_unified.json`，并重启 Codex App Server。
-- GPT 模型返回 401：确认 Codex 已完成 ChatGPT 登录，且 `requires_openai_auth = true`。
+- GPT 模型返回 401：确认 Codex 已完成 ChatGPT 登录，且 `forced_login_method = "chatgpt"`、`requires_openai_auth = true`。
 
 ## 安全说明
 
