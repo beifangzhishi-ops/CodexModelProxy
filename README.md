@@ -90,6 +90,8 @@ http_headers = { "X-Proxy-Access-Token" = "你的访问令牌" }
 
 只修改 `config_unified.toml` 不会影响当前 Codex 配置；运行 `config_unified.cmd` 才会把模板写入活动 `config.toml`。切换失败时脚本不会替换当前 `config.toml`。
 
+仓库内的 `config-templates/` 提供切换脚本示例：`switch_config.ps1`、`config_unified.toml`、`config_unified.cmd`。新机器把它们复制到 `%USERPROFILE%\.codex`，按本机修改模板中的 `model_catalog_json` 路径和访问令牌后即可运行；模板中的密钥均为占位符，不会携带任何真实凭据。
+
 ## 命令速查
 
 ```text
@@ -115,6 +117,7 @@ codex exec -m deepseek-v4-flash-direct "提示词"
 | `proxy-secrets.env.example` | 密钥模板；复制为 `proxy-secrets.env` 填写，后者不提交 |
 | `proxy-local.env.example` | 本机差异模板；复制为 `proxy-local.env` 填写，后者不提交 |
 | `models_unified.json` | Codex 统一模型目录（7 个模型） |
+| `config-templates/` | Codex 配置切换脚本示例（脱敏模板，复制到 `%USERPROFILE%\.codex` 后按本机修改） |
 | `test/proxy.test.mjs`、`test/compact-fallback.test.mjs` | 自动测试（内存 mock 上游，不消耗真实额度） |
 
 ## 代理设置

@@ -1,0 +1,12 @@
+model_provider = "OpenAI"
+model = "deepseek-v4-flash"
+model_reasoning_effort = "max"
+forced_login_method = "chatgpt"
+model_catalog_json = "C:/你的克隆目录/CodexModelProxy/models_unified.json"
+
+[model_providers.OpenAI]
+name = "unified"
+base_url = "http://127.0.0.1:8787/v1"
+wire_api = "responses"
+requires_openai_auth = true
+http_headers = { "X-Proxy-Access-Token" = "你的访问令牌" }
