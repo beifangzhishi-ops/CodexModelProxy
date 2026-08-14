@@ -10,6 +10,7 @@ import tls from 'node:tls';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { forwardCompactWithFallback } from './compact-forward.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_FILE = path.join(__dirname, 'proxy-config.json');
@@ -29,9 +30,10 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 
 export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT_CONFIG_FILE) {
+  const resolvedConfigFile = path.resolve(configFile);
   let raw;
   try {
-    raw = fs.readFileSync(configFile, 'utf8');
+    raw = fs.readFileSync(resolvedConfigFile, 'utf8');
   } catch (err) {
     throw new Error(`无法读取配置文件：${configFile}（${err.message}）`);
   }
@@ -42,11 +44,6 @@ export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT
   if (!config.models || typeof config.models !== 'object' || Array.isArray(config.models)) {
     throw new Error('proxy-config.json 缺少 models 对象');
   }
-  for (const slug of ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol']) {
-    if (!config.models[slug]) {
-      throw new Error(`路由缺少模型：${slug}`);
-    }
-  }
   for (const [slug, route] of Object.entries(config.models)) {
     if (!route.upstream_base_url || typeof route.upstream_base_url !== 'string') {
       throw new Error(`路由 ${slug} 缺少 upstream_base_url`);
@@ -54,9 +51,37 @@ export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT
     if (!route.upstream_model || typeof route.upstream_model !== 'string') {
       throw new Error(`路由 ${slug} 缺少 upstream_model`);
     }
-    if (!route.api_key_env || typeof route.api_key_env !== 'string') {
+    const authMode = route.auth_mode || 'api_key';
+    if (!['api_key', 'openai_passthrough'].includes(authMode)) {
+      throw new Error(`路由 ${slug} auth_mode 无效`);
+    }
+    if (authMode === 'api_key' && (!route.api_key_env || typeof route.api_key_env !== 'string')) {
       throw new Error(`路由 ${slug} 缺少 api_key_env`);
     }
+  }
+  if (
+    config.compact_fallback_model !== undefined &&
+    (
+      typeof config.compact_fallback_model !== 'string' ||
+      !config.compact_fallback_model.trim() ||
+      !config.models[config.compact_fallback_model]
+    )
+  ) {
+    throw new Error('compact_fallback_model 必须是 models 中已有的模型 slug');
+  }
+  if (config.model_catalog_file) {
+    const catalogFile = path.resolve(path.dirname(resolvedConfigFile), config.model_catalog_file);
+    let catalog;
+    try {
+      catalog = JSON.parse(fs.readFileSync(catalogFile, 'utf8'));
+    } catch (err) {
+      throw new Error(`无法读取模型目录：${catalogFile}（${err.message}）`);
+    }
+    if (!catalog || !Array.isArray(catalog.models)) {
+      throw new Error('模型目录必须包含 models 数组');
+    }
+    assertSameSlugs('路由与模型目录名册', Object.keys(config.models), catalog.models.map((model) => model.slug));
+    config.catalog = catalog;
   }
   return config;
 }
@@ -90,13 +115,15 @@ export function loadSecrets(secretsFile = process.env.PROXY_SECRETS_FILE || DEFA
 
 export function createProxyServer({ config, secrets, logger = console, env = process.env }) {
   const routes = config.models || {};
+  const catalogModels = Array.isArray(config.catalog?.models) ? config.catalog.models : null;
+  const compactFallbackSlug = config.compact_fallback_model || 'deepseek-v4-flash';
   const accessToken = (env.PROXY_ACCESS_TOKEN || config.access_token || '').trim();
   const proxyUrl = env.PROXY_URL || config.proxy || '';
   const requireToken = accessToken.length > 0;
 
   function isAuthorized(req) {
     if (!requireToken) return true;
-    return safeEqual(req.headers.authorization || '', `Bearer ${accessToken}`);
+    return safeEqual(getHeader(req, 'x-proxy-access-token'), accessToken);
   }
 
   const server = http.createServer((req, res) => {
@@ -116,13 +143,15 @@ export function createProxyServer({ config, secrets, logger = console, env = pro
     }
 
     if (req.method === 'GET' && pathname === '/v1/models') {
+      const data = Object.keys(routes).map((slug) => ({
+        id: slug,
+        object: 'model',
+        owned_by: 'unified',
+      }));
       sendJson(res, 200, {
         object: 'list',
-        data: Object.keys(routes).map((slug) => ({
-          id: slug,
-          object: 'model',
-          owned_by: 'unified',
-        })),
+        models: catalogModels || data,
+        data,
       });
       return;
     }
@@ -149,6 +178,40 @@ export function createProxyServer({ config, secrets, logger = console, env = pro
       return;
     }
 
+    if (req.method === 'POST' && pathname === '/v1/responses/compact') {
+      readJsonBody(req, (err, body) => {
+        if (err) {
+          sendJson(res, 400, {
+            error: { type: 'invalid_request_error', message: `请求体解析失败：${err.message}` },
+          });
+          return;
+        }
+        const model = body && typeof body.model === 'string' ? body.model : '';
+        const route = routes[model];
+        if (!route) {
+          logger.info(`[codex-proxy] POST /v1/responses/compact model=${model || '(空)'} -> 未知模型 400`);
+          sendJson(res, 400, {
+            error: { type: 'invalid_request_error', message: `未知模型：${model}` },
+          });
+          return;
+        }
+        forwardCompactWithFallback({
+          req,
+          res,
+          body,
+          slug: model,
+          route,
+          fallbackSlug: compactFallbackSlug,
+          fallbackRoute: routes[compactFallbackSlug],
+          secrets,
+          logger,
+          proxyUrl,
+          env,
+        });
+      });
+      return;
+    }
+
     sendJson(res, 404, { error: { type: 'not_found', message: '未找到该路径' } });
   });
   return server;
@@ -163,6 +226,24 @@ function safeEqual(a, b) {
     diff |= (bufA[i] || 0) ^ (bufB[i] || 0);
   }
   return diff === 0;
+}
+
+function getHeader(req, name) {
+  const value = req.headers[name.toLowerCase()];
+  return Array.isArray(value) ? (value[0] || '') : (value || '');
+}
+
+function assertSameSlugs(label, expected, actual) {
+  const expectedSet = new Set(expected);
+  const actualSet = new Set(actual);
+  if (
+    expectedSet.size !== expected.length ||
+    actualSet.size !== actual.length ||
+    expectedSet.size !== actualSet.size ||
+    [...expectedSet].some((slug) => !actualSet.has(slug))
+  ) {
+    throw new Error(`${label}不一致：路由=${expected.join(',')}，目录=${actual.join(',')}`);
+  }
 }
 
 function sendJson(res, status, payload) {
@@ -258,12 +339,25 @@ function createProxyAgent(proxyUrl) {
 }
 
 function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUrl, env) {
-  const apiKey = env[route.api_key_env] || secrets[route.api_key_env];
-  if (!apiKey) {
-    sendJson(res, 500, {
-      error: { type: 'server_error', message: `缺少上游密钥：${route.api_key_env}` },
-    });
-    return;
+  const authMode = route.auth_mode || 'api_key';
+  let upstreamAuthorization;
+  if (authMode === 'openai_passthrough') {
+    upstreamAuthorization = getHeader(req, 'authorization');
+    if (!upstreamAuthorization) {
+      sendJson(res, 401, {
+        error: { type: 'authentication_error', message: '缺少 ChatGPT 登录认证' },
+      });
+      return;
+    }
+  } else {
+    const apiKey = env[route.api_key_env] || secrets[route.api_key_env];
+    if (!apiKey) {
+      sendJson(res, 500, {
+        error: { type: 'server_error', message: `缺少上游密钥：${route.api_key_env}` },
+      });
+      return;
+    }
+    upstreamAuthorization = `Bearer ${apiKey}`;
   }
   const endpoint = route.upstream_base_url.replace(/\/+$/, '') + '/responses';
   let upstreamUrl;
@@ -284,6 +378,7 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
     if (
       lower === 'host' ||
       lower === 'authorization' ||
+      lower === 'x-proxy-access-token' ||
       lower === 'content-length' ||
       HOP_BY_HOP_HEADERS.has(lower)
     ) {
@@ -291,7 +386,7 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
     }
     headers[key] = value;
   }
-  headers.authorization = `Bearer ${apiKey}`;
+  headers.authorization = upstreamAuthorization;
   headers['content-length'] = Buffer.byteLength(upstreamBody);
   if (!headers['content-type']) headers['content-type'] = 'application/json';
   if (!headers.accept) headers.accept = 'application/json';
@@ -354,6 +449,7 @@ if (isMain()) {
   }
   const missingKeys = [...new Set(
     Object.values(config.models)
+      .filter((route) => (route.auth_mode || 'api_key') !== 'openai_passthrough')
       .filter((route) => !(env[route.api_key_env] || secrets[route.api_key_env]))
       .map((route) => route.api_key_env),
   )];
