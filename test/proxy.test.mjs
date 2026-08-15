@@ -22,40 +22,47 @@ function testRoutes(mockBaseUrl) {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'gpt-5.6-sol',
       auth_mode: 'openai_passthrough',
+      reasoning_format: 'openai_encrypted',
     },
     'gpt-5.6-terra': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'gpt-5.6-terra',
       auth_mode: 'openai_passthrough',
+      reasoning_format: 'openai_encrypted',
     },
     'gpt-5.6-luna': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'gpt-5.6-luna',
       auth_mode: 'openai_passthrough',
+      reasoning_format: 'openai_encrypted',
     },
     'deepseek-v4-flash': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'deepseek-v4-flash',
       auth_mode: 'api_key',
       api_key_env: 'OPENCODE_API_KEY',
+      reasoning_format: 'deepseek_plaintext',
     },
     'deepseek-v4-pro': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'deepseek-v4-pro',
       auth_mode: 'api_key',
       api_key_env: 'OPENCODE_API_KEY',
+      reasoning_format: 'deepseek_plaintext',
     },
     'deepseek-v4-flash-direct': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'deepseek-v4-flash',
       auth_mode: 'api_key',
       api_key_env: 'DEEPSEEK_API_KEY',
+      reasoning_format: 'deepseek_plaintext',
     },
     'deepseek-v4-pro-direct': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'deepseek-v4-pro',
       auth_mode: 'api_key',
       api_key_env: 'DEEPSEEK_API_KEY',
+      reasoning_format: 'deepseek_plaintext',
     },
   };
 }
@@ -329,4 +336,171 @@ test('生产配置的路由与统一模型目录严格对应', () => {
 
 test('密钥文件缺失时返回空对象', () => {
   assert.deepEqual(loadSecrets('./__missing_secrets_never_exists__.env'), {});
+});
+
+const dsReasoningFixture = {
+  type: 'reasoning',
+  content: [{ type: 'reasoning_text', text: 'ds-thought' }],
+  encrypted_content: null,
+};
+
+const gptReasoningFixture = {
+  type: 'reasoning',
+  encrypted_content: 'opaque-gpt',
+  content: [],
+};
+
+const userMessageFixture = {
+  type: 'message',
+  role: 'user',
+  content: [{ type: 'input_text', text: 'hello' }],
+};
+
+test('发往 GPT 时移除 DS 明文 reasoning，保留 GPT 加密 reasoning', async () => {
+  await withServers(async (mock, proxy) => {
+    const body = {
+      model: 'gpt-5.6-sol',
+      input: [dsReasoningFixture, gptReasoningFixture, userMessageFixture],
+    };
+    const result = await postJson(
+      proxy.baseUrl,
+      body,
+      { authorization: 'Bearer chatgpt-login-token' },
+    );
+    assert.equal(result.status, 200);
+    assert.deepEqual(mock.seen[0].body.input, [gptReasoningFixture, userMessageFixture]);
+  });
+});
+
+test('发往 DS 时移除 GPT 加密 reasoning，保留 DS 明文 reasoning', async () => {
+  await withServers(async (mock, proxy) => {
+    const body = {
+      model: 'deepseek-v4-flash',
+      input: [gptReasoningFixture, dsReasoningFixture, userMessageFixture],
+    };
+    const result = await postJson(proxy.baseUrl, body);
+    assert.equal(result.status, 200);
+    assert.deepEqual(mock.seen[0].body.input, [dsReasoningFixture, userMessageFixture]);
+  });
+});
+
+test('混合历史分别发往 GPT、OC DS 与直连 DS 时只保留各自兼容格式', async () => {
+  await withServers(async (mock, proxy) => {
+    const input = [dsReasoningFixture, gptReasoningFixture, userMessageFixture];
+    await postJson(
+      proxy.baseUrl,
+      { model: 'gpt-5.6-terra', input },
+      { authorization: 'Bearer chatgpt-login-token' },
+    );
+    await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input });
+    await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash-direct', input });
+
+    assert.deepEqual(mock.seen[0].body.input, [gptReasoningFixture, userMessageFixture]);
+    assert.deepEqual(mock.seen[1].body.input, [dsReasoningFixture, userMessageFixture]);
+    assert.deepEqual(mock.seen[2].body.input, [dsReasoningFixture, userMessageFixture]);
+  });
+});
+
+test('畸形与不完整 reasoning 对 GPT 和 DS 均安全移除', async () => {
+  await withServers(async (mock, proxy) => {
+    const malformed = [
+      { type: 'reasoning' },
+      { type: 'reasoning', content: [] },
+      { type: 'reasoning', encrypted_content: '' },
+      { type: 'reasoning', content: 'not-an-array', encrypted_content: 'opaque' },
+      {
+        type: 'reasoning',
+        content: [{ type: 'reasoning_text', text: 'both' }],
+        encrypted_content: 'opaque',
+      },
+      userMessageFixture,
+    ];
+    await postJson(
+      proxy.baseUrl,
+      { model: 'gpt-5.6-luna', input: malformed },
+      { authorization: 'Bearer chatgpt-login-token' },
+    );
+    assert.deepEqual(mock.seen[0].body.input, [userMessageFixture]);
+
+    await postJson(proxy.baseUrl, { model: 'deepseek-v4-pro', input: malformed });
+    assert.deepEqual(mock.seen[1].body.input, [userMessageFixture]);
+  });
+});
+
+test('普通消息、工具调用、搜索与压缩项在历史整理中保持不变', async () => {
+  await withServers(async (mock, proxy) => {
+    const preserved = [
+      {
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'hi' },
+          { type: 'input_image', image_url: 'https://example.com/a.png' },
+        ],
+      },
+      { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'demo', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
+      { type: 'search_call', id: 'sc_1', query: 'x' },
+      {
+        type: 'search_result',
+        id: 'sr_1',
+        source: { id: 's1' },
+        content: [{ type: 'output_text', text: 'result' }],
+      },
+      { type: 'compaction', encrypted_content: 'opaque-compact' },
+      { type: 'item_reference', id: 'item_1' },
+    ];
+    await postJson(
+      proxy.baseUrl,
+      { model: 'gpt-5.6-sol', input: [dsReasoningFixture, ...preserved] },
+      { authorization: 'Bearer chatgpt-login-token' },
+    );
+    assert.deepEqual(mock.seen[0].body.input, preserved);
+
+    await postJson(
+      proxy.baseUrl,
+      { model: 'deepseek-v4-flash', input: [gptReasoningFixture, ...preserved] },
+    );
+    assert.deepEqual(mock.seen[1].body.input, preserved);
+  });
+});
+
+test('字符串 input 与不含 reasoning 的 input 保持原样', async () => {
+  await withServers(async (mock, proxy) => {
+    const stringBody = { model: 'deepseek-v4-flash', input: 'hello' };
+    await postJson(proxy.baseUrl, stringBody);
+    assert.equal(mock.seen[0].body.input, 'hello');
+
+    const plainInput = [{ type: 'input_text', text: 'hello' }];
+    const plainBody = {
+      model: 'gpt-5.6-sol',
+      input: plainInput,
+      tools: [{ type: 'function', name: 'demo' }],
+      previous_response_id: 'resp_prev',
+      metadata: { keep: true },
+    };
+    await postJson(
+      proxy.baseUrl,
+      plainBody,
+      { authorization: 'Bearer chatgpt-login-token' },
+    );
+    assert.deepEqual(mock.seen[1].body, { ...plainBody, model: 'gpt-5.6-sol' });
+  });
+});
+
+test('历史整理日志只记录数量，不泄露推理正文', async () => {
+  const logs = [];
+  const logger = { info: (message) => logs.push(message), error() {}, warn() {} };
+  await withServers(
+    async (mock, proxy) => {
+      await postJson(
+        proxy.baseUrl,
+        { model: 'gpt-5.6-sol', input: [dsReasoningFixture, gptReasoningFixture, userMessageFixture] },
+        { authorization: 'Bearer chatgpt-login-token' },
+      );
+      assert.ok(logs.some((message) => message.includes('历史整理：移除 reasoning 1 项')));
+      assert.ok(logs.every((message) => !message.includes('ds-thought') && !message.includes('opaque-gpt')));
+    },
+    { logger },
+  );
 });

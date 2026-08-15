@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { forwardCompactWithFallback } from './compact-forward.mjs';
+import { normalizeResponsesBody, isValidReasoningFormat } from './history-normalize.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_FILE = path.join(__dirname, 'proxy-config.json');
@@ -57,6 +58,9 @@ export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT
     }
     if (authMode === 'api_key' && (!route.api_key_env || typeof route.api_key_env !== 'string')) {
       throw new Error(`路由 ${slug} 缺少 api_key_env`);
+    }
+    if (!route.reasoning_format || !isValidReasoningFormat(route.reasoning_format)) {
+      throw new Error(`路由 ${slug} 缺少或无效的 reasoning_format`);
     }
   }
   if (
@@ -369,7 +373,16 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
   }
   const lib = upstreamUrl.protocol === 'https:' ? https : http;
   const agent = upstreamUrl.protocol === 'https:' && proxyUrl ? createProxyAgent(proxyUrl) : undefined;
-  const upstreamBody = JSON.stringify({ ...body, model: route.upstream_model });
+  const { body: normalizedBody, removedReasoningIndexes } = normalizeResponsesBody(
+    body,
+    route.reasoning_format || 'passthrough',
+  );
+  if (removedReasoningIndexes.length > 0) {
+    logger.info(
+      `[codex-proxy] POST /v1/responses model=${slug} 历史整理：移除 reasoning ${removedReasoningIndexes.length} 项`,
+    );
+  }
+  const upstreamBody = JSON.stringify({ ...normalizedBody, model: route.upstream_model });
   // 尽量原样转发客户端请求头（与 Codex 直连上游时看到的请求一致），
   // 只替换鉴权与 content-length，并剔除逐跳头。
   const headers = {};

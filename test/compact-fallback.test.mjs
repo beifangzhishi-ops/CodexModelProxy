@@ -44,12 +44,14 @@ function startProxy(upstreamBaseUrl) {
         upstream_base_url: upstreamBaseUrl,
         upstream_model: 'default-upstream',
         auth_mode: 'openai_passthrough',
+        reasoning_format: 'openai_encrypted',
       },
       'flash-model': {
         upstream_base_url: upstreamBaseUrl,
         upstream_model: 'deepseek-v4-flash',
         auth_mode: 'api_key',
         api_key_env: 'FLASH_API_KEY',
+        reasoning_format: 'deepseek_plaintext',
       },
     },
   };
@@ -67,14 +69,14 @@ function startProxy(upstreamBaseUrl) {
   });
 }
 
-async function postCompact(proxyBaseUrl, model) {
+async function postCompact(proxyBaseUrl, model, input = [{ role: 'user', content: '测试' }]) {
   const response = await fetch(`${proxyBaseUrl}/v1/responses/compact`, {
     method: 'POST',
     headers: {
       authorization: 'Bearer chatgpt-login-token',
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ model, input: [{ role: 'user', content: '测试' }] }),
+    body: JSON.stringify({ model, input }),
   });
   return { status: response.status, body: await response.json() };
 }
@@ -140,5 +142,35 @@ test('未知压缩模型返回 400 且不访问上游', async () => {
     assert.equal(result.status, 400);
     assert.match(result.body.error.message, /未知模型/);
     assert.equal(upstream.seen.length, 0);
+  });
+});
+
+test('压缩首次请求按 GPT 格式整理，后备请求从原始历史按 DS 格式重新整理', async () => {
+  const dsReasoning = {
+    type: 'reasoning',
+    content: [{ type: 'reasoning_text', text: 'ds-thought' }],
+    encrypted_content: null,
+  };
+  const gptReasoning = {
+    type: 'reasoning',
+    encrypted_content: 'opaque-gpt',
+    content: [],
+  };
+  const message = {
+    type: 'message',
+    role: 'user',
+    content: [{ type: 'input_text', text: '测试' }],
+  };
+  await withProxy({ failModels: new Set(['default-upstream']) }, async (upstream, proxy) => {
+    const result = await postCompact(proxy.baseUrl, 'default-model', [
+      dsReasoning,
+      gptReasoning,
+      message,
+    ]);
+
+    assert.equal(result.status, 200);
+    assert.equal(upstream.seen.length, 2);
+    assert.deepEqual(upstream.seen[0].body.input, [gptReasoning, message]);
+    assert.deepEqual(upstream.seen[1].body.input, [dsReasoning, message]);
   });
 });
