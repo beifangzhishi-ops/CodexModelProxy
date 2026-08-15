@@ -48,6 +48,12 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 
 > 注意：代理本身就是 Codex 正在使用的通信通道。如果当前 Codex 正通过本中转（`base_url` 指向本代理），停止或重启代理前，请先切换到直连配置，操作完成后再切回统一中转。
 
+## 分支与更新流程
+
+- 所有代码与文档更新默认提交到 `beta` 分支并推送到 `origin/beta`，不直接推送 `origin/master`。
+- 仅当用户明确指示合并时，才把 `beta` 合并到 `master` 并推送 `origin/master`。
+- 未合并到 `master` 的更新以 `beta` 分支为准；需要试用时切换到 `beta` 分支部署。
+
 ## Codex 配置
 
 统一配置涉及三处文件：仓库内的 `proxy-secrets.env` 与 `proxy-local.env` 保存本机差异，`C:\Users\noha\.codex\config_unified.toml` 是 Codex 的备用统一配置模板。
