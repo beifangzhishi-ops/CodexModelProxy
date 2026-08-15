@@ -3,6 +3,7 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import tls from 'node:tls';
+import { normalizeResponsesBody } from './history-normalize.mjs';
 
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 600000;
@@ -39,9 +40,18 @@ export async function forwardCompactWithFallback({
   res.once('close', onClientClose);
 
   const attempt = async (attemptSlug, attemptRoute) => {
+    const { body: normalizedBody, removedReasoningIndexes } = normalizeResponsesBody(
+      body,
+      attemptRoute.reasoning_format || 'passthrough',
+    );
+    if (removedReasoningIndexes.length > 0) {
+      logger.info(
+        `[codex-proxy] POST /v1/responses/compact model=${attemptSlug} 历史整理：移除 reasoning ${removedReasoningIndexes.length} 项`,
+      );
+    }
     const result = await requestBufferedCompact({
       req,
-      body,
+      body: normalizedBody,
       slug: attemptSlug,
       route: attemptRoute,
       secrets,

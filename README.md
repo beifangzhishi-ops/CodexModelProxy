@@ -1,6 +1,6 @@
 # CodexModelProxy 七模型纯 Responses 中转（Windows）
 
-本目录是一个零依赖的 Node.js 本地中转服务，让 Codex 通过一个本地地址同时使用 7 个上游模型（ChatGPT × 3、OpenCode × 2、DeepSeek × 2）。所有上游统一走 `/responses` 协议；代理只替换模型名、处理鉴权，其余请求与响应原样转发，不做任何协议转换。
+本目录是一个零依赖的 Node.js 本地中转服务，让 Codex 通过一个本地地址同时使用 7 个上游模型（ChatGPT × 3、OpenCode × 2、DeepSeek × 2）。所有上游统一走 `/responses` 协议；代理替换模型名、处理鉴权，并在发送前按目标模型整理 reasoning 历史，其余请求与响应原样转发，不做协议转换。
 
 项目只面向 Windows 本机使用，通过 Git 仓库在多个机器间同步更新：通用配置提交到仓库，密钥与本机差异（代理地址、端口、访问令牌）放在各自机器上、不提交。
 
@@ -23,8 +23,9 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 ## 转发行为
 
 - 只处理 `POST /v1/responses`、`POST /v1/responses/compact` 与 `GET /v1/models`；所有路由固定追加 `/responses`。
-- 请求体除 `model` 替换为实际上游模型名外保持不变；JSON 与 SSE 响应状态、响应头和正文原样返回。
-- 不解析或转换工具调用、推理内容、SSE 事件；上游返回什么就返回什么。
+- 请求体除 `model` 替换为实际上游模型名外，还会按目标模型的 reasoning 格式整理推理历史；JSON 与 SSE 响应状态、响应头和正文原样返回。
+- 跨 GPT/DeepSeek 切换时自动移除不兼容的推理项：GPT 路由只保留带 `encrypted_content` 的 OpenAI 推理状态，OpenCode/DeepSeek 路由只保留带明文 `content` 的推理项；整理只影响本次上游请求，不修改 Codex 原会话。
+- 不解析或转换工具调用、SSE 事件；推理历史仅按上述格式规则过滤，不做内容转换。
 - 三个 GPT 路由把 Codex 的 ChatGPT 登录认证（`Authorization`）原样转发至 Backend API。
 - OC 与直连 DeepSeek 路由丢弃传入的 ChatGPT `Authorization`，分别注入 `OPENCODE_API_KEY` 与 `DEEPSEEK_API_KEY`。
 - 未知模型、缺少登录认证、缺少上游密钥时不访问上游，直接返回错误。
@@ -113,12 +114,13 @@ codex exec -m deepseek-v4-flash-direct "提示词"
 |---|---|
 | `server.mjs` | 中转服务主程序，零依赖 |
 | `compact-forward.mjs` | `/responses/compact` 转发与失败后备模型重试 |
-| `proxy-config.json` | 通用配置：监听地址、端口、压缩后备模型与 7 条模型路由（提交到仓库） |
+| `history-normalize.mjs` | 按目标模型整理 reasoning 历史（发送前过滤，不修改原会话） |
+| `proxy-config.json` | 通用配置：监听地址、端口、压缩后备模型与 7 条模型路由；每条路由声明 `reasoning_format`（提交到仓库） |
 | `proxy-secrets.env.example` | 密钥模板；复制为 `proxy-secrets.env` 填写，后者不提交 |
 | `proxy-local.env.example` | 本机差异模板；复制为 `proxy-local.env` 填写，后者不提交 |
 | `models_unified.json` | Codex 统一模型目录（7 个模型） |
 | `config-templates/` | Codex 配置切换脚本示例（脱敏模板，复制到 `%USERPROFILE%\.codex` 后按本机修改） |
-| `test/proxy.test.mjs`、`test/compact-fallback.test.mjs` | 自动测试（内存 mock 上游，不消耗真实额度） |
+| `test/proxy.test.mjs`、`test/compact-fallback.test.mjs`、`test/history-normalize.test.mjs` | 自动测试（内存 mock 上游，不消耗真实额度） |
 
 ## 代理设置
 
@@ -133,15 +135,16 @@ PROXY_URL=http://127.0.0.1:7890
 ## 测试
 
 ```text
-node --test test\proxy.test.mjs test\compact-fallback.test.mjs
+node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fallback.test.mjs
 ```
 
-测试覆盖健康检查、模型列表、7 条路由、模型名与密钥隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备与未知模型拦截。
+测试覆盖健康检查、模型列表、7 条路由、模型名与密钥隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、未知模型拦截，以及 GPT/DeepSeek 双向 reasoning 历史整理与畸形推理项处理。
 
 ## 已知限制
 
 - OpenCode GO 的 `/responses` 兼容层返回字段较精简，标准多轮工具调用历史可能不被完整接受；代理只原样返回上游错误，不做转换或缓存。
 - DeepSeek 直连的 `/responses` 兼容性取决于上游实现；代理不降级到 Chat Completions。
+- 历史整理只解决 GPT/DeepSeek 之间的 reasoning 格式兼容，不解决真正的上下文 token 超限；净化后若上游仍返回上下文长度错误，需要压缩或裁剪会话。
 - 模型目录在 Codex App Server 启动时加载，改动后需重启 App Server 才会刷新下拉列表。
 - 全部 7 个目录项允许附加图片，但实际模型不能原生识图时仍会按上游能力报错。
 
