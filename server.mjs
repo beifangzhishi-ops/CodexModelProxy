@@ -373,13 +373,24 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
   }
   const lib = upstreamUrl.protocol === 'https:' ? https : http;
   const agent = upstreamUrl.protocol === 'https:' && proxyUrl ? createProxyAgent(proxyUrl) : undefined;
-  const { body: normalizedBody, removedReasoningIndexes } = normalizeResponsesBody(
+  const {
+    body: normalizedBody,
+    removedReasoningIndexes,
+    removedWebSearchIndexes,
+  } = normalizeResponsesBody(
     body,
     route.reasoning_format || 'passthrough',
   );
+  const removedParts = [];
   if (removedReasoningIndexes.length > 0) {
+    removedParts.push(`reasoning ${removedReasoningIndexes.length} 项`);
+  }
+  if (removedWebSearchIndexes.length > 0) {
+    removedParts.push(`web_search_call ${removedWebSearchIndexes.length} 项`);
+  }
+  if (removedParts.length > 0) {
     logger.info(
-      `[codex-proxy] POST /v1/responses model=${slug} 历史整理：移除 reasoning ${removedReasoningIndexes.length} 项`,
+      `[codex-proxy] POST /v1/responses model=${slug} 历史整理：移除 ${removedParts.join('、')}`,
     );
   }
   const upstreamBody = JSON.stringify({ ...normalizedBody, model: route.upstream_model });

@@ -1,4 +1,4 @@
-// 跨 GPT/DeepSeek 历史整理：发送前按目标供应商的 reasoning 格式过滤。
+// 跨 GPT/DeepSeek 历史整理：发送前按目标供应商的 reasoning 与网页搜索格式过滤。
 // 只影响本次上游请求，不修改 Codex 原会话；不记录推理正文。
 
 export const REASONING_FORMATS = Object.freeze({
@@ -15,29 +15,49 @@ export function isValidReasoningFormat(value) {
 
 export function normalizeResponsesBody(body, reasoningFormat) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    return { body, removedReasoningIndexes: [] };
+    return { body, removedReasoningIndexes: [], removedWebSearchIndexes: [] };
   }
   if (!Array.isArray(body.input)) {
-    return { body, removedReasoningIndexes: [] };
+    return { body, removedReasoningIndexes: [], removedWebSearchIndexes: [] };
   }
   const removedReasoningIndexes = [];
+  const removedWebSearchIndexes = [];
   const normalizedInput = [];
   for (let index = 0; index < body.input.length; index++) {
     const item = body.input[index];
-    if (!isReasoningItem(item) || keepReasoning(item, reasoningFormat)) {
-      normalizedInput.push(item);
+    if (isReasoningItem(item) && !keepReasoning(item, reasoningFormat)) {
+      removedReasoningIndexes.push(index);
       continue;
     }
-    removedReasoningIndexes.push(index);
+    if (isWebSearchCall(item) && !keepWebSearchCall(item, reasoningFormat)) {
+      removedWebSearchIndexes.push(index);
+      continue;
+    }
+    normalizedInput.push(item);
   }
-  if (removedReasoningIndexes.length === 0) {
-    return { body, removedReasoningIndexes };
+  if (removedReasoningIndexes.length === 0 && removedWebSearchIndexes.length === 0) {
+    return { body, removedReasoningIndexes, removedWebSearchIndexes };
   }
-  return { body: { ...body, input: normalizedInput }, removedReasoningIndexes };
+  return {
+    body: { ...body, input: normalizedInput },
+    removedReasoningIndexes,
+    removedWebSearchIndexes,
+  };
 }
 
 function isReasoningItem(item) {
   return !!item && typeof item === 'object' && item.type === 'reasoning';
+}
+
+function isWebSearchCall(item) {
+  return !!item && typeof item === 'object' && item.type === 'web_search_call';
+}
+
+function keepWebSearchCall(item, reasoningFormat) {
+  // GPT 的 Responses 要求 web_search_call.id 以 ws 开头；
+  // DS/Codex 风格的 call_... 搜索记录只在发往 GPT 时移除。
+  if (reasoningFormat !== REASONING_FORMATS.OPENAI_ENCRYPTED) return true;
+  return typeof item.id === 'string' && item.id.startsWith('ws');
 }
 
 function keepReasoning(item, reasoningFormat) {

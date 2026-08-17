@@ -40,13 +40,24 @@ export async function forwardCompactWithFallback({
   res.once('close', onClientClose);
 
   const attempt = async (attemptSlug, attemptRoute) => {
-    const { body: normalizedBody, removedReasoningIndexes } = normalizeResponsesBody(
+    const {
+      body: normalizedBody,
+      removedReasoningIndexes,
+      removedWebSearchIndexes,
+    } = normalizeResponsesBody(
       body,
       attemptRoute.reasoning_format || 'passthrough',
     );
+    const removedParts = [];
     if (removedReasoningIndexes.length > 0) {
+      removedParts.push(`reasoning ${removedReasoningIndexes.length} 项`);
+    }
+    if (removedWebSearchIndexes.length > 0) {
+      removedParts.push(`web_search_call ${removedWebSearchIndexes.length} 项`);
+    }
+    if (removedParts.length > 0) {
       logger.info(
-        `[codex-proxy] POST /v1/responses/compact model=${attemptSlug} 历史整理：移除 reasoning ${removedReasoningIndexes.length} 项`,
+        `[codex-proxy] POST /v1/responses/compact model=${attemptSlug} 历史整理：移除 ${removedParts.join('、')}`,
       );
     }
     const result = await requestBufferedCompact({
