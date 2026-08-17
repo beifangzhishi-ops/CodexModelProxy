@@ -504,3 +504,58 @@ test('历史整理日志只记录数量，不泄露推理正文', async () => {
     { logger },
   );
 });
+
+const dsWebSearchFixture = {
+  type: 'web_search_call',
+  id: 'call_00_bXZiVEuheXGCpYHtDOCm5367',
+  status: 'completed',
+};
+
+const gptWebSearchFixture = {
+  type: 'web_search_call',
+  id: 'ws_67ccf18f64008190a39b619f4c8455ef',
+  status: 'completed',
+};
+
+test('发往 GPT 时移除 DS 风格 web_search_call，保留 ws_ 前缀记录', async () => {
+  await withServers(async (mock, proxy) => {
+    const result = await postJson(
+      proxy.baseUrl,
+      {
+        model: 'gpt-5.6-sol',
+        input: [dsWebSearchFixture, gptWebSearchFixture, userMessageFixture],
+      },
+      { authorization: 'Bearer chatgpt-login-token' },
+    );
+    assert.equal(result.status, 200);
+    assert.deepEqual(mock.seen[0].body.input, [gptWebSearchFixture, userMessageFixture]);
+  });
+});
+
+test('发往 DS 时保留全部 web_search_call', async () => {
+  await withServers(async (mock, proxy) => {
+    const input = [dsWebSearchFixture, gptWebSearchFixture];
+    const result = await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input });
+    assert.equal(result.status, 200);
+    assert.deepEqual(mock.seen[0].body.input, input);
+  });
+});
+
+test('历史整理日志记录 web_search_call 数量，不泄露搜索 ID', async () => {
+  const logs = [];
+  const logger = { info: (message) => logs.push(message), error() {}, warn() {} };
+  await withServers(
+    async (mock, proxy) => {
+      await postJson(
+        proxy.baseUrl,
+        { model: 'gpt-5.6-sol', input: [dsWebSearchFixture, userMessageFixture] },
+        { authorization: 'Bearer chatgpt-login-token' },
+      );
+      assert.ok(logs.some((message) => message.includes('web_search_call 1 项')));
+      assert.ok(
+        logs.every((message) => !message.includes('call_00_bXZiVEuheXGCpYHtDOCm5367')),
+      );
+    },
+    { logger },
+  );
+});

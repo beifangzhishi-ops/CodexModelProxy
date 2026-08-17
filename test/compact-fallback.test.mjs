@@ -161,16 +161,33 @@ test('压缩首次请求按 GPT 格式整理，后备请求从原始历史按 DS
     role: 'user',
     content: [{ type: 'input_text', text: '测试' }],
   };
+  const dsWebSearch = {
+    type: 'web_search_call',
+    id: 'call_00_test',
+    status: 'completed',
+  };
+  const gptWebSearch = {
+    type: 'web_search_call',
+    id: 'ws_test',
+    status: 'completed',
+  };
   await withProxy({ failModels: new Set(['default-upstream']) }, async (upstream, proxy) => {
     const result = await postCompact(proxy.baseUrl, 'default-model', [
       dsReasoning,
       gptReasoning,
+      dsWebSearch,
+      gptWebSearch,
       message,
     ]);
 
     assert.equal(result.status, 200);
     assert.equal(upstream.seen.length, 2);
-    assert.deepEqual(upstream.seen[0].body.input, [gptReasoning, message]);
-    assert.deepEqual(upstream.seen[1].body.input, [dsReasoning, message]);
+    assert.deepEqual(upstream.seen[0].body.input, [gptReasoning, gptWebSearch, message]);
+    assert.deepEqual(upstream.seen[1].body.input, [
+      dsReasoning,
+      dsWebSearch,
+      gptWebSearch,
+      message,
+    ]);
   });
 });

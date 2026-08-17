@@ -25,6 +25,18 @@ const userMessage = {
   content: [{ type: 'input_text', text: 'hello' }],
 };
 
+const dsWebSearch = {
+  type: 'web_search_call',
+  id: 'call_00_bXZiVEuheXGCpYHtDOCm5367',
+  status: 'completed',
+};
+
+const gptWebSearch = {
+  type: 'web_search_call',
+  id: 'ws_67ccf18f64008190a39b619f4c8455ef',
+  status: 'completed',
+};
+
 test('GPT 目标只保留带有效 encrypted_content 的 reasoning', () => {
   const result = normalizeResponsesBody(
     { input: [dsReasoning, gptReasoning, userMessage] },
@@ -112,6 +124,7 @@ test('非对象请求体与非法 reasoning_format 均安全返回', () => {
   const nullResult = normalizeResponsesBody(null, GPT);
   assert.equal(nullResult.body, null);
   assert.deepEqual(nullResult.removedReasoningIndexes, []);
+  assert.deepEqual(nullResult.removedWebSearchIndexes, []);
 
   const unknownFormat = normalizeResponsesBody(
     { input: [dsReasoning, gptReasoning] },
@@ -119,4 +132,28 @@ test('非对象请求体与非法 reasoning_format 均安全返回', () => {
   );
   assert.deepEqual(unknownFormat.body.input, [dsReasoning, gptReasoning]);
   assert.deepEqual(unknownFormat.removedReasoningIndexes, []);
+  assert.deepEqual(unknownFormat.removedWebSearchIndexes, []);
+});
+
+test('GPT 目标删除非 ws 前缀的 web_search_call，保留 ws_ 记录', () => {
+  const result = normalizeResponsesBody(
+    { input: [dsWebSearch, gptWebSearch, userMessage] },
+    GPT,
+  );
+  assert.deepEqual(result.body.input, [gptWebSearch, userMessage]);
+  assert.deepEqual(result.removedWebSearchIndexes, [0]);
+  assert.deepEqual(result.removedReasoningIndexes, []);
+});
+
+test('DS 与 passthrough 目标保留全部 web_search_call', () => {
+  const input = [dsWebSearch, gptWebSearch];
+  const dsBody = { input };
+  const dsResult = normalizeResponsesBody(dsBody, DS);
+  assert.equal(dsResult.body, dsBody);
+  assert.deepEqual(dsResult.removedWebSearchIndexes, []);
+
+  const passBody = { input };
+  const passResult = normalizeResponsesBody(passBody, PASSTHROUGH);
+  assert.equal(passResult.body, passBody);
+  assert.deepEqual(passResult.removedWebSearchIndexes, []);
 });
