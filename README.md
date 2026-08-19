@@ -24,6 +24,7 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 
 - 只处理 `POST /v1/responses`、`POST /v1/responses/compact` 与 `GET /v1/models`；所有路由固定追加 `/responses`。
 - 请求体除 `model` 替换为实际上游模型名外，还会按目标模型的 reasoning 格式整理推理历史；JSON 与 SSE 响应状态、响应头和正文原样返回。
+- 两个 Pro 路由（`deepseek-v4-pro`、`deepseek-v4-pro-direct`）会在每次普通 `/v1/responses` 请求的 `instructions` 前加入简短的 `We need…` 思考风格提示，并保留客户端原有指令；Flash、GPT 与 `/responses/compact` 不注入。
 - 跨 GPT/DeepSeek 切换时自动移除不兼容的推理项：GPT 路由只保留带 `encrypted_content` 的 OpenAI 推理状态，OpenCode/DeepSeek 路由只保留带明文 `content` 的推理项；整理只影响本次上游请求，不修改 Codex 原会话。
 - 跨模型切换时同步整理网页搜索记录：GPT 路由只保留 `id` 以 `ws` 开头的 `web_search_call`，DS/Codex 风格的 `call_...` 搜索调用项从本次上游请求移除；助手消息中的搜索结论与引用不受影响。
 - 不解析或转换工具调用、SSE 事件；推理历史仅按上述格式规则过滤，不做内容转换。
@@ -122,7 +123,7 @@ codex exec -m deepseek-v4-flash-direct "提示词"
 | `server.mjs` | 中转服务主程序，零依赖 |
 | `compact-forward.mjs` | `/responses/compact` 转发与失败后备模型重试 |
 | `history-normalize.mjs` | 按目标模型整理 reasoning 历史与 `web_search_call` 记录（发送前过滤，不修改原会话） |
-| `proxy-config.json` | 通用配置：监听地址、端口、压缩后备模型与 7 条模型路由；每条路由声明 `reasoning_format`（提交到仓库） |
+| `proxy-config.json` | 通用配置：监听地址、端口、压缩后备模型与 7 条模型路由；每条路由声明 `reasoning_format`，Pro 路由额外声明 `prompt_profile`（提交到仓库） |
 | `proxy-secrets.env.example` | 密钥模板；复制为 `proxy-secrets.env` 填写，后者不提交 |
 | `proxy-local.env.example` | 本机差异模板；复制为 `proxy-local.env` 填写，后者不提交 |
 | `models_unified.json` | Codex 统一模型目录（7 个模型） |
@@ -145,7 +146,7 @@ PROXY_URL=http://127.0.0.1:7890
 node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fallback.test.mjs
 ```
 
-测试覆盖健康检查、模型列表、7 条路由、模型名与密钥隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、未知模型拦截，以及 GPT/DeepSeek 双向 reasoning 历史整理、`web_search_call` 过滤与畸形推理项处理。
+测试覆盖健康检查、模型列表、7 条路由、模型名与密钥隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、未知模型拦截、Pro 提示词注入与去重，以及 GPT/DeepSeek 双向 reasoning 历史整理、`web_search_call` 过滤与畸形推理项处理。
 
 ## 已知限制
 

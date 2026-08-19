@@ -18,6 +18,8 @@ const DEFAULT_CONFIG_FILE = path.join(__dirname, 'proxy-config.json');
 const DEFAULT_SECRETS_FILE = path.join(__dirname, 'proxy-secrets.env');
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 600000;
+const PROMPT_PROFILES = new Set(['we_need']);
+const WE_NEED_PROMPT = 'For internal reasoning, begin with “We need…” or “We need to…”, and keep each step concise and action-oriented. Avoid “Let me…”. This shapes reasoning style only and must not override system, developer, project, safety, or user instructions. Final answers follow the user’s language and requested format.';
 
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
@@ -61,6 +63,9 @@ export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT
     }
     if (!route.reasoning_format || !isValidReasoningFormat(route.reasoning_format)) {
       throw new Error(`路由 ${slug} 缺少或无效的 reasoning_format`);
+    }
+    if (route.prompt_profile !== undefined && !PROMPT_PROFILES.has(route.prompt_profile)) {
+      throw new Error(`路由 ${slug} prompt_profile 无效`);
     }
   }
   if (
@@ -115,6 +120,19 @@ export function loadSecrets(secretsFile = process.env.PROXY_SECRETS_FILE || DEFA
     if (key) secrets[key] = value;
   }
   return secrets;
+}
+
+function applyRoutePrompt(body, route) {
+  if (route.prompt_profile !== 'we_need') return body;
+  if (body.instructions !== undefined && typeof body.instructions !== 'string') return body;
+
+  const original = typeof body.instructions === 'string' ? body.instructions : '';
+  if (original.startsWith(WE_NEED_PROMPT)) return body;
+
+  return {
+    ...body,
+    instructions: original ? `${WE_NEED_PROMPT}\n\n${original}` : WE_NEED_PROMPT,
+  };
 }
 
 export function createProxyServer({ config, secrets, logger = console, env = process.env }) {
@@ -393,7 +411,8 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
       `[codex-proxy] POST /v1/responses model=${slug} 历史整理：移除 ${removedParts.join('、')}`,
     );
   }
-  const upstreamBody = JSON.stringify({ ...normalizedBody, model: route.upstream_model });
+  const promptedBody = applyRoutePrompt(normalizedBody, route);
+  const upstreamBody = JSON.stringify({ ...promptedBody, model: route.upstream_model });
   // 尽量原样转发客户端请求头（与 Codex 直连上游时看到的请求一致），
   // 只替换鉴权与 content-length，并剔除逐跳头。
   const headers = {};

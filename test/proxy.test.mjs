@@ -15,6 +15,7 @@ const MODEL_SLUGS = [
 ];
 
 const silentLogger = { info() {}, error() {}, warn() {} };
+const EXPECTED_WE_NEED_PROMPT = 'For internal reasoning, begin with “We need…” or “We need to…”, and keep each step concise and action-oriented. Avoid “Let me…”. This shapes reasoning style only and must not override system, developer, project, safety, or user instructions. Final answers follow the user’s language and requested format.';
 
 function testRoutes(mockBaseUrl) {
   return {
@@ -49,6 +50,7 @@ function testRoutes(mockBaseUrl) {
       auth_mode: 'api_key',
       api_key_env: 'OPENCODE_API_KEY',
       reasoning_format: 'deepseek_plaintext',
+      prompt_profile: 'we_need',
     },
     'deepseek-v4-flash-direct': {
       upstream_base_url: mockBaseUrl,
@@ -63,6 +65,7 @@ function testRoutes(mockBaseUrl) {
       auth_mode: 'api_key',
       api_key_env: 'DEEPSEEK_API_KEY',
       reasoning_format: 'deepseek_plaintext',
+      prompt_profile: 'we_need',
     },
   };
 }
@@ -485,6 +488,65 @@ test('字符串 input 与不含 reasoning 的 input 保持原样', async () => {
       { authorization: 'Bearer chatgpt-login-token' },
     );
     assert.deepEqual(mock.seen[1].body, { ...plainBody, model: 'gpt-5.6-sol' });
+  });
+});
+
+test('两个 Pro 路由注入 we_need 提示并保留原有 instructions', async () => {
+  await withServers(async (mock, proxy) => {
+    const original = '保留这段原有系统指令';
+    for (const slug of ['deepseek-v4-pro', 'deepseek-v4-pro-direct']) {
+      const result = await postJson(proxy.baseUrl, {
+        model: slug,
+        input: 'hello',
+        instructions: original,
+      });
+      assert.equal(result.status, 200);
+    }
+
+    assert.deepEqual(
+      mock.seen.map((request) => request.body.instructions),
+      [
+        `${EXPECTED_WE_NEED_PROMPT}\n\n${original}`,
+        `${EXPECTED_WE_NEED_PROMPT}\n\n${original}`,
+      ],
+    );
+  });
+});
+
+test('we_need 提示支持空 instructions、不会重复注入，其他模型不受影响', async () => {
+  await withServers(async (mock, proxy) => {
+    await postJson(proxy.baseUrl, { model: 'deepseek-v4-pro', input: 'hello' });
+    await postJson(proxy.baseUrl, {
+      model: 'deepseek-v4-pro',
+      input: 'hello',
+      instructions: `${EXPECTED_WE_NEED_PROMPT}\n\n已有指令`,
+    });
+    await postJson(proxy.baseUrl, {
+      model: 'deepseek-v4-flash',
+      input: 'hello',
+      instructions: 'Flash 原有指令',
+    });
+
+    assert.equal(mock.seen[0].body.instructions, EXPECTED_WE_NEED_PROMPT);
+    assert.equal(mock.seen[1].body.instructions, `${EXPECTED_WE_NEED_PROMPT}\n\n已有指令`);
+    assert.equal(mock.seen[2].body.instructions, 'Flash 原有指令');
+  });
+});
+
+test('Responses 压缩请求不注入 we_need 提示', async () => {
+  await withServers(async (mock, proxy) => {
+    const result = await fetch(`${proxy.baseUrl}/v1/responses/compact`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek-v4-pro',
+        input: 'hello',
+        instructions: '压缩请求原有指令',
+      }),
+    });
+    assert.equal(result.status, 200);
+    assert.equal(mock.seen[0].url, '/responses/compact');
+    assert.equal(mock.seen[0].body.instructions, '压缩请求原有指令');
   });
 });
 

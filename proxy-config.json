@@ -35,7 +35,8 @@
       "upstream_model": "deepseek-v4-pro",
       "auth_mode": "api_key",
       "api_key_env": "OPENCODE_API_KEY",
-      "reasoning_format": "deepseek_plaintext"
+      "reasoning_format": "deepseek_plaintext",
+      "prompt_profile": "we_need"
     },
     "deepseek-v4-flash-direct": {
       "upstream_base_url": "https://api.deepseek.com/",
@@ -49,7 +50,8 @@
       "upstream_model": "deepseek-v4-pro",
       "auth_mode": "api_key",
       "api_key_env": "DEEPSEEK_API_KEY",
-      "reasoning_format": "deepseek_plaintext"
+      "reasoning_format": "deepseek_plaintext",
+      "prompt_profile": "we_need"
     }
   }
 }
