@@ -56,7 +56,7 @@
       "upstream_model": "stealth/ox-alpha",
       "auth_mode": "api_key",
       "api_key_env": "OPENROUTER_API_KEY",
-      "reasoning_format": "passthrough"
+      "reasoning_format": "openrouter_compatible"
     }
   }
 }
