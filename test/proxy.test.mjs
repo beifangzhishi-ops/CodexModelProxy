@@ -73,7 +73,7 @@ function testRoutes(mockBaseUrl) {
       upstream_model: 'stealth/ox-alpha',
       auth_mode: 'api_key',
       api_key_env: 'OPENROUTER_API_KEY',
-      reasoning_format: 'passthrough',
+      reasoning_format: 'openrouter_compatible',
     },
   };
 }
@@ -351,7 +351,7 @@ test('生产配置的路由与统一模型目录严格对应', () => {
   assert.equal(config.models['gpt-5.6-sol'].auth_mode, 'openai_passthrough');
   assert.equal(config.models['ox-alpha'].upstream_model, 'stealth/ox-alpha');
   assert.equal(config.models['ox-alpha'].api_key_env, 'OPENROUTER_API_KEY');
-  assert.equal(config.models['ox-alpha'].reasoning_format, 'passthrough');
+  assert.equal(config.models['ox-alpha'].reasoning_format, 'openrouter_compatible');
 });
 
 test('密钥文件缺失时返回空对象', () => {

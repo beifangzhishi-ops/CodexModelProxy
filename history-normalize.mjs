@@ -4,6 +4,7 @@
 export const REASONING_FORMATS = Object.freeze({
   OPENAI_ENCRYPTED: 'openai_encrypted',
   DEEPSEEK_PLAINTEXT: 'deepseek_plaintext',
+  OPENROUTER_COMPATIBLE: 'openrouter_compatible',
   PASSTHROUGH: 'passthrough',
 });
 
@@ -54,6 +55,8 @@ function isWebSearchCall(item) {
 }
 
 function keepWebSearchCall(item, reasoningFormat) {
+  // OpenRouter Responses 不接受 Codex 的 web_search_call 历史项；搜索结论仍保留在助手消息中。
+  if (reasoningFormat === REASONING_FORMATS.OPENROUTER_COMPATIBLE) return false;
   // GPT 的 Responses 要求 web_search_call.id 以 ws 开头；
   // DS/Codex 风格的 call_... 搜索记录只在发往 GPT 时移除。
   if (reasoningFormat !== REASONING_FORMATS.OPENAI_ENCRYPTED) return true;
@@ -65,6 +68,8 @@ function keepReasoning(item, reasoningFormat) {
   const hasEncrypted =
     typeof item.encrypted_content === 'string' && item.encrypted_content.length > 0;
   const hasPlaintext = Array.isArray(item.content) && item.content.length > 0;
+  // 加密 reasoning 属于原上游的私有状态，跨供应商无法可靠恢复；OpenRouter 只保留非加密项。
+  if (reasoningFormat === REASONING_FORMATS.OPENROUTER_COMPATIBLE) return !hasEncrypted;
   if (reasoningFormat === REASONING_FORMATS.OPENAI_ENCRYPTED) {
     const contentEmpty =
       item.content === undefined ||

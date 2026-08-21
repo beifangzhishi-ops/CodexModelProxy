@@ -5,6 +5,7 @@ import { normalizeResponsesBody, REASONING_FORMATS } from '../history-normalize.
 
 const GPT = REASONING_FORMATS.OPENAI_ENCRYPTED;
 const DS = REASONING_FORMATS.DEEPSEEK_PLAINTEXT;
+const OPENROUTER = REASONING_FORMATS.OPENROUTER_COMPATIBLE;
 const PASSTHROUGH = REASONING_FORMATS.PASSTHROUGH;
 
 const dsReasoning = {
@@ -156,4 +157,14 @@ test('DS 与 passthrough 目标保留全部 web_search_call', () => {
   const passResult = normalizeResponsesBody(passBody, PASSTHROUGH);
   assert.equal(passResult.body, passBody);
   assert.deepEqual(passResult.removedWebSearchIndexes, []);
+});
+
+test('OpenRouter 删除加密 reasoning 与 web_search_call，保留普通历史', () => {
+  const body = {
+    input: [gptReasoning, dsReasoning, dsWebSearch, gptWebSearch, userMessage],
+  };
+  const result = normalizeResponsesBody(body, OPENROUTER);
+  assert.deepEqual(result.body.input, [dsReasoning, userMessage]);
+  assert.deepEqual(result.removedReasoningIndexes, [0]);
+  assert.deepEqual(result.removedWebSearchIndexes, [2, 3]);
 });
