@@ -268,6 +268,72 @@ function assertSameSlugs(label, expected, actual) {
   }
 }
 
+function summarizeResponsesRequest(body) {
+  const inputTypes = {};
+  const toolLabels = {};
+  const callIds = new Set();
+  const outputIds = new Set();
+  const bump = (map, key) => {
+    map[key] = (map[key] || 0) + 1;
+  };
+  const items = Array.isArray(body.input)
+    ? body.input
+    : typeof body.input === 'string'
+      ? [{ type: 'input_string' }]
+      : [];
+  for (const item of items) {
+    bump(inputTypes, item && typeof item.type === 'string' ? item.type : 'invalid_item');
+    if (item && typeof item.call_id === 'string') {
+      if (item.type === 'function_call_output' || item.type === 'custom_tool_call_output') {
+        outputIds.add(item.call_id);
+      } else {
+        callIds.add(item.call_id);
+      }
+    }
+  }
+  if (Array.isArray(body.tools)) {
+    for (const tool of body.tools) {
+      if (!tool || typeof tool !== 'object') continue;
+      const kind = typeof tool.type === 'string' ? tool.type : 'invalid_tool';
+      bump(toolLabels, typeof tool.name === 'string' ? `${kind}:${tool.name}` : kind);
+    }
+  }
+  let missingOutputs = 0;
+  let missingCalls = 0;
+  for (const id of callIds) if (!outputIds.has(id)) missingOutputs += 1;
+  for (const id of outputIds) if (!callIds.has(id)) missingCalls += 1;
+  return { inputTypes, toolLabels, missingOutputs, missingCalls };
+}
+
+function formatCounts(counts) {
+  return Object.entries(counts).map(([key, value]) => `${key}=${value}`).join(',') || 'none';
+}
+
+function extractUpstreamErrorDetail(raw) {
+  const text = String(raw);
+  try {
+    const parsed = JSON.parse(text);
+    const err = parsed && typeof parsed.error === 'object' && parsed.error !== null ? parsed.error : parsed;
+    const parts = [];
+    if (err && err.message) parts.push(`msg=${String(err.message).slice(0, 800)}`);
+    if (err && err.code !== undefined && err.code !== null) parts.push(`code=${String(err.code).slice(0, 100)}`);
+    const metadata = err && typeof err.metadata === 'object' && err.metadata !== null ? err.metadata : {};
+    const rawDetail = metadata.raw || err?.raw;
+    if (rawDetail) {
+      let providerMsg = String(rawDetail);
+      try {
+        const providerParsed = JSON.parse(providerMsg);
+        if (providerParsed?.error?.message) providerMsg = String(providerParsed.error.message);
+      } catch {}
+      parts.push(`provider=${providerMsg.replace(/\s+/g, ' ').slice(0, 600)}`);
+    }
+    if (parts.length > 0) return parts.join(' ');
+    return `body=${text.replace(/\s+/g, ' ').slice(0, 500)}`;
+  } catch {
+    return `text=${text.replace(/\s+/g, ' ').slice(0, 500)}`;
+  }
+}
+
 function sendJson(res, status, payload) {
   const raw = JSON.stringify(payload);
   res.writeHead(status, {
@@ -413,6 +479,7 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
   }
   const promptedBody = applyRoutePrompt(normalizedBody, route);
   const upstreamBody = JSON.stringify({ ...promptedBody, model: route.upstream_model });
+  const requestSummary = summarizeResponsesRequest(promptedBody);
   // 尽量原样转发客户端请求头（与 Codex 直连上游时看到的请求一致），
   // 只替换鉴权与 content-length，并剔除逐跳头。
   const headers = {};
@@ -442,9 +509,26 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
     for (const [key, value] of Object.entries(upRes.headers)) {
       if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) outHeaders[key] = value;
     }
+    if (status >= 400) {
+      const errChunks = [];
+      let errBytes = 0;
+      upRes.on('data', (chunk) => {
+        if (errBytes < 65536) {
+          errChunks.push(chunk);
+          errBytes += chunk.length;
+        }
+      });
+      upRes.on('end', () => {
+        const raw = Buffer.concat(errChunks).toString('utf8');
+        logger.error(
+          `[codex-proxy] 上游诊断 model=${slug} status=${status} bytes=${Buffer.byteLength(upstreamBody)} ${extractUpstreamErrorDetail(raw)} 输入[${formatCounts(requestSummary.inputTypes)}] 工具[${formatCounts(requestSummary.toolLabels)}] 孤立调用=${requestSummary.missingOutputs} 孤立输出=${requestSummary.missingCalls}`,
+        );
+      });
+    } else {
+      logger.info(`[codex-proxy] POST /v1/responses model=${slug} -> ${upstreamUrl.host} status=${status}`);
+    }
     res.writeHead(status, outHeaders);
     upRes.pipe(res);
-    logger.info(`[codex-proxy] POST /v1/responses model=${slug} -> ${upstreamUrl.host} status=${status}`);
   });
   outgoing.setTimeout(UPSTREAM_TIMEOUT_MS, () => {
     outgoing.destroy(new Error('上游响应超时'));

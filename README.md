@@ -34,6 +34,7 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 - OC 与直连 DeepSeek 路由丢弃传入的 ChatGPT `Authorization`，分别注入 `OPENCODE_API_KEY` 与 `DEEPSEEK_API_KEY`。
 - 未知模型、缺少登录认证、缺少上游密钥时不访问上游，直接返回错误。
 - 日志只记录模型与上游主机，不记录提示词、响应正文、请求头与 API 密钥。
+- 上游返回 4xx/5xx 时，代理额外写一条脱敏诊断日志：提取错误 `message`/`code`/provider 原始消息，统计请求输入类型、工具类型和孤立调用数；不记录提示词、工具参数或密钥。
 
 ## 图片上传
 
