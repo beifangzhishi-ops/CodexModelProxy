@@ -155,6 +155,7 @@ node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fal
 - OpenCode GO 的 `/responses` 兼容层返回字段较精简，标准多轮工具调用历史可能不被完整接受；代理只原样返回上游错误，不做转换或缓存。
 - OpenRouter 上的 Ox Alpha 是匿名预览模型，免费资格、可用性和上游策略可能变化；当前使用 `stealth/ox-alpha`，并通过 `OPENROUTER_API_KEY` 认证。
 - Ox Alpha 路由使用 `reasoning_format: openrouter_compatible`：跨供应商切换时删除带 `encrypted_content` 的 reasoning 和 `web_search_call`，不尝试恢复原供应商的私有思考状态。
+- OpenRouter/Stealth 上游不接受 Codex 的 freeform custom 工具（`apply_patch`），因此 Ox Alpha 目录中 `apply_patch_tool_type` 置为 `null`，该模型改用 `exec_command` 完成文件操作；不把 custom 转成 function，以免客户端执行路径与上游协议错位。
 - DeepSeek 直连的 `/responses` 兼容性取决于上游实现；代理不降级到 Chat Completions。
 - 历史整理只解决已知的 GPT/DeepSeek/OpenRouter 历史格式兼容，不解决真正的上下文 token 超限；净化后若上游仍返回上下文长度错误，需要压缩或裁剪会话。
 - 模型目录在 Codex App Server 启动时加载，改动后需重启 App Server 才会刷新下拉列表。
