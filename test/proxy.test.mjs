@@ -12,6 +12,7 @@ const MODEL_SLUGS = [
   'deepseek-v4-pro',
   'deepseek-v4-flash-direct',
   'deepseek-v4-pro-direct',
+  'ox-alpha',
 ];
 
 const silentLogger = { info() {}, error() {}, warn() {} };
@@ -64,6 +65,13 @@ function testRoutes(mockBaseUrl) {
       api_key_env: 'DEEPSEEK_API_KEY',
       reasoning_format: 'deepseek_plaintext',
     },
+    'ox-alpha': {
+      upstream_base_url: mockBaseUrl,
+      upstream_model: 'stealth/ox-alpha',
+      auth_mode: 'api_key',
+      api_key_env: 'OPENROUTER_API_KEY',
+      reasoning_format: 'passthrough',
+    },
   };
 }
 
@@ -79,7 +87,11 @@ function testCatalog() {
 }
 
 function testSecrets() {
-  return { OPENCODE_API_KEY: 'test-open-key', DEEPSEEK_API_KEY: 'test-deep-key' };
+  return {
+    OPENCODE_API_KEY: 'test-open-key',
+    DEEPSEEK_API_KEY: 'test-deep-key',
+    OPENROUTER_API_KEY: 'test-or-key',
+  };
 }
 
 function startMockUpstream() {
@@ -166,7 +178,7 @@ async function withServers(fn, { secrets = testSecrets(), env = {}, logger = sil
   }
 }
 
-test('健康检查与模型列表包含七个目录项，并声明图片输入', async () => {
+test('健康检查与模型列表包含八个目录项，并声明图片输入', async () => {
   await withServers(async (mock, proxy) => {
     const health = await fetch(`${proxy.baseUrl}/healthz`);
     assert.equal(health.status, 200);
@@ -183,19 +195,19 @@ test('健康检查与模型列表包含七个目录项，并声明图片输入',
   });
 });
 
-test('七个模型均请求 /responses，模型名和密钥按路由隔离', async () => {
+test('八个模型均请求 /responses，模型名和密钥按路由隔离', async () => {
   await withServers(async (mock, proxy) => {
     const gptHeaders = { authorization: 'Bearer chatgpt-login-token', 'chatgpt-account-id': 'acct-test' };
     for (const slug of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
       const result = await postJson(proxy.baseUrl, { model: slug, input: [{ type: 'input_text', text: 'hello' }] }, gptHeaders);
       assert.equal(result.status, 200);
     }
-    for (const slug of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-direct', 'deepseek-v4-pro-direct']) {
+    for (const slug of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-direct', 'deepseek-v4-pro-direct', 'ox-alpha']) {
       const result = await postJson(proxy.baseUrl, { model: slug, input: 'hello' });
       assert.equal(result.status, 200);
     }
 
-    assert.deepEqual(mock.seen.map((request) => request.url), Array(7).fill('/responses'));
+    assert.deepEqual(mock.seen.map((request) => request.url), Array(8).fill('/responses'));
     assert.deepEqual(mock.seen.map((request) => request.body.model), [
       'gpt-5.6-sol',
       'gpt-5.6-terra',
@@ -204,6 +216,7 @@ test('七个模型均请求 /responses，模型名和密钥按路由隔离', asy
       'deepseek-v4-pro',
       'deepseek-v4-flash',
       'deepseek-v4-pro',
+      'stealth/ox-alpha',
     ]);
     assert.deepEqual(mock.seen.slice(0, 3).map((request) => request.auth), Array(3).fill('Bearer chatgpt-login-token'));
     assert.deepEqual(mock.seen.slice(0, 3).map((request) => request.accountId), Array(3).fill('acct-test'));
@@ -212,6 +225,7 @@ test('七个模型均请求 /responses，模型名和密钥按路由隔离', asy
       'Bearer test-open-key',
       'Bearer test-deep-key',
       'Bearer test-deep-key',
+      'Bearer test-or-key',
     ]);
   });
 });
@@ -332,6 +346,9 @@ test('生产配置的路由与统一模型目录严格对应', () => {
   assert.deepEqual(config.catalog.models.map((model) => model.slug), MODEL_SLUGS);
   assert.equal(config.models['deepseek-v4-flash'].auth_mode, 'api_key');
   assert.equal(config.models['gpt-5.6-sol'].auth_mode, 'openai_passthrough');
+  assert.equal(config.models['ox-alpha'].upstream_model, 'stealth/ox-alpha');
+  assert.equal(config.models['ox-alpha'].api_key_env, 'OPENROUTER_API_KEY');
+  assert.equal(config.models['ox-alpha'].reasoning_format, 'passthrough');
 });
 
 test('密钥文件缺失时返回空对象', () => {

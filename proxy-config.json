@@ -50,6 +50,13 @@
       "auth_mode": "api_key",
       "api_key_env": "DEEPSEEK_API_KEY",
       "reasoning_format": "deepseek_plaintext"
+    },
+    "ox-alpha": {
+      "upstream_base_url": "https://openrouter.ai/api/v1",
+      "upstream_model": "stealth/ox-alpha",
+      "auth_mode": "api_key",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "reasoning_format": "passthrough"
     }
   }
 }
