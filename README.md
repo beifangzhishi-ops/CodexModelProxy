@@ -1,6 +1,6 @@
-# CodexModelProxy 七模型纯 Responses 中转（Windows）
+# CodexModelProxy 八模型纯 Responses 中转（Windows）
 
-本目录是一个零依赖的 Node.js 本地中转服务，让 Codex 通过一个本地地址同时使用 7 个上游模型（ChatGPT × 3、OpenCode × 2、DeepSeek × 2）。所有上游统一走 `/responses` 协议；代理替换模型名、处理鉴权，并在发送前按目标模型整理 reasoning 历史，其余请求与响应原样转发，不做协议转换。
+本目录是一个零依赖的 Node.js 本地中转服务，让 Codex 通过一个本地地址同时使用 8 个上游模型（ChatGPT × 3、OpenCode × 2、DeepSeek × 2、OpenRouter × 1）。所有上游统一走 `/responses` 协议；代理替换模型名、处理鉴权，并在发送前按目标模型整理 reasoning 历史，其余请求与响应原样转发，不做协议转换。
 
 项目只面向 Windows 本机使用，通过 Git 仓库在多个机器间同步更新：通用配置提交到仓库，密钥与本机差异（代理地址、端口、访问令牌）放在各自机器上、不提交。
 
@@ -17,8 +17,9 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 | `deepseek-v4-pro` | OC · DSV4 Pro | `OPENCODE_API_KEY` | OpenCode GO `deepseek-v4-pro` |
 | `deepseek-v4-flash-direct` | DS · V4 Flash · 直连 | `DEEPSEEK_API_KEY` | DeepSeek `deepseek-v4-flash` |
 | `deepseek-v4-pro-direct` | DS · V4 Pro · 直连 | `DEEPSEEK_API_KEY` | DeepSeek `deepseek-v4-pro` |
+| `ox-alpha` | OR · Ox Alpha | `OPENROUTER_API_KEY` | OpenRouter `stealth/ox-alpha` |
 
-默认模型为 `deepseek-v4-flash`（OC · DSV4 Flash）。`gpt-5.4-mini`、`gpt-5.4-nano`、Gemini、MiMo 均不进入目录。
+默认模型为 `deepseek-v4-flash`（OC · DSV4 Flash）。Ox Alpha 是 OpenRouter 上的匿名预览模型，当前免费提供；`gpt-5.4-mini`、`gpt-5.4-nano`、Gemini、MiMo 均不进入目录。
 
 ## 转发行为
 
@@ -35,13 +36,13 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 
 ## 图片上传
 
-`models_unified.json` 中 7 个模型均声明 `input_modalities: ["text", "image"]` 与 `supports_image_detail_original: true`，因此桌面端允许上传图片；能否真正识别图片取决于上游模型是否支持图片输入。若某个上游不接受图片，把对应条目的 `input_modalities` 改回 `["text"]` 即可。
+`models_unified.json` 中 8 个模型均声明 `input_modalities: ["text", "image"]` 与 `supports_image_detail_original: true`，因此桌面端允许上传图片；能否真正识别图片取决于上游模型是否支持图片输入。若某个上游不接受图片，把对应条目的 `input_modalities` 改回 `["text"]` 即可。
 
 ## 快速开始（每台机器各执行一次）
 
 1. 安装 Node.js（本项目只用内置模块，无需安装任何依赖）。
 2. 把仓库克隆到本机任意目录。
-3. 复制 `proxy-secrets.env.example` 为 `proxy-secrets.env`，填写 `OPENCODE_API_KEY` 与 `DEEPSEEK_API_KEY`。该文件已被 Git 忽略，不会提交，各机器填各自的密钥。
+3. 复制 `proxy-secrets.env.example` 为 `proxy-secrets.env`，填写 `OPENCODE_API_KEY`、`DEEPSEEK_API_KEY` 与 `OPENROUTER_API_KEY`。该文件已被 Git 忽略，不会提交，各机器填各自的密钥。
 4. 若上游需要走代理（OpenCode 有区域限制，一般需要本机代理），复制 `proxy-local.env.example` 为 `proxy-local.env`，按本机代理端口修改 `PROXY_URL`；不需要代理时把值留空。启用本地访问令牌时在此文件加 `PROXY_ACCESS_TOKEN=...`。
 5. 双击或运行 `start-proxy.cmd` 启动中转。浏览器打开 `http://127.0.0.1:8787/healthz`，应返回 `{"status":"ok"}`。
 6. 按下方“Codex 配置”准备三处文件并运行切换脚本。
@@ -61,7 +62,7 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 
 统一配置涉及三处文件：仓库内的 `proxy-secrets.env` 与 `proxy-local.env` 保存本机差异，`C:\Users\noha\.codex\config_unified.toml` 是 Codex 的备用统一配置模板。
 
-1. `proxy-secrets.env`：填写 `OPENCODE_API_KEY` 与 `DEEPSEEK_API_KEY`，两个 OC 路由和两个直连 DeepSeek 路由分别使用它们。
+1. `proxy-secrets.env`：填写 `OPENCODE_API_KEY`、`DEEPSEEK_API_KEY` 与 `OPENROUTER_API_KEY`，两个 OC 路由、两个直连 DeepSeek 路由和 Ox Alpha 路由分别使用它们。
 2. `proxy-local.env`：设置本机 `PROXY_URL`、`HOST`、`PORT`；启用本地访问令牌时加 `PROXY_ACCESS_TOKEN=...`，其值必须与下方 `http_headers` 中的一致。
 3. `config_unified.toml`（位于 `%USERPROFILE%\.codex`）：
 
@@ -95,7 +96,7 @@ http_headers = { "X-Proxy-Access-Token" = "你的访问令牌" }
 2. 运行 `C:\Users\noha\.codex\config_unified.cmd`（个人目录的切换脚本，不在本仓库内）。
 3. 脚本只把模板中的模型、认证和 `[model_providers.OpenAI]` 区段写入活动 `config.toml`，桌面端、插件、MCP、项目权限等其他配置保留。
 4. 重启 Codex App Server 或重新加载配置，让启动时加载的模型目录刷新。
-5. 下拉列表应正好显示 7 个模型，默认模型为 `deepseek-v4-flash`。
+5. 下拉列表应正好显示 8 个模型，默认模型为 `deepseek-v4-flash`。
 
 只修改 `config_unified.toml` 不会影响当前 Codex 配置；运行 `config_unified.cmd` 才会把模板写入活动 `config.toml`。切换失败时脚本不会替换当前 `config.toml`。
 
@@ -114,6 +115,7 @@ CLI 单独指定模型（不改全局配置）：
 codex exec -m gpt-5.6-sol "提示词"
 codex exec -m deepseek-v4-flash "提示词"
 codex exec -m deepseek-v4-flash-direct "提示词"
+codex exec -m ox-alpha "提示词"
 ```
 
 ## 文件说明
@@ -123,10 +125,10 @@ codex exec -m deepseek-v4-flash-direct "提示词"
 | `server.mjs` | 中转服务主程序，零依赖 |
 | `compact-forward.mjs` | `/responses/compact` 转发与失败后备模型重试 |
 | `history-normalize.mjs` | 按目标模型整理 reasoning 历史与 `web_search_call` 记录（发送前过滤，不修改原会话） |
-| `proxy-config.json` | 通用配置：监听地址、端口、压缩后备模型与 7 条模型路由；每条路由声明 `reasoning_format`，Pro 路由额外声明 `prompt_profile`（提交到仓库） |
+| `proxy-config.json` | 通用配置：监听地址、端口、压缩后备模型与 8 条模型路由；每条路由声明 `reasoning_format`，Pro 路由额外声明 `prompt_profile`（提交到仓库） |
 | `proxy-secrets.env.example` | 密钥模板；复制为 `proxy-secrets.env` 填写，后者不提交 |
 | `proxy-local.env.example` | 本机差异模板；复制为 `proxy-local.env` 填写，后者不提交 |
-| `models_unified.json` | Codex 统一模型目录（7 个模型） |
+| `models_unified.json` | Codex 统一模型目录（8 个模型） |
 | `config-templates/` | Codex 配置切换脚本示例（脱敏模板，复制到 `%USERPROFILE%\.codex` 后按本机修改） |
 | `test/proxy.test.mjs`、`test/compact-fallback.test.mjs`、`test/history-normalize.test.mjs` | 自动测试（内存 mock 上游，不消耗真实额度） |
 
@@ -146,15 +148,17 @@ PROXY_URL=http://127.0.0.1:7890
 node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fallback.test.mjs
 ```
 
-测试覆盖健康检查、模型列表、7 条路由、模型名与密钥隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、未知模型拦截、Pro 提示词注入与去重，以及 GPT/DeepSeek 双向 reasoning 历史整理、`web_search_call` 过滤与畸形推理项处理。
+测试覆盖健康检查、模型列表、8 条路由、模型名与密钥隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、未知模型拦截、Pro 提示词注入与去重，以及 GPT/DeepSeek 双向 reasoning 历史整理、`web_search_call` 过滤与畸形推理项处理。
 
 ## 已知限制
 
 - OpenCode GO 的 `/responses` 兼容层返回字段较精简，标准多轮工具调用历史可能不被完整接受；代理只原样返回上游错误，不做转换或缓存。
+- OpenRouter 上的 Ox Alpha 是匿名预览模型，免费资格、可用性和上游策略可能变化；当前使用 `stealth/ox-alpha`，并通过 `OPENROUTER_API_KEY` 认证。
+- Ox Alpha 路由暂时使用 `reasoning_format: passthrough`，以保留 OpenRouter 返回的推理格式；若跨模型多轮切换出现上游不接受历史推理项，再按实测错误收紧过滤规则。
 - DeepSeek 直连的 `/responses` 兼容性取决于上游实现；代理不降级到 Chat Completions。
 - 历史整理只解决 GPT/DeepSeek 之间的 reasoning 格式兼容，不解决真正的上下文 token 超限；净化后若上游仍返回上下文长度错误，需要压缩或裁剪会话。
 - 模型目录在 Codex App Server 启动时加载，改动后需重启 App Server 才会刷新下拉列表。
-- 全部 7 个目录项允许附加图片，但实际模型不能原生识图时仍会按上游能力报错。
+- 全部 8 个目录项允许附加图片，但实际模型不能原生识图时仍会按上游能力报错。
 
 ## 故障排查
 
