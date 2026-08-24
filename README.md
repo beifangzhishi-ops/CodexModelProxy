@@ -58,6 +58,7 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 - 所有代码与文档更新默认提交到 `beta` 分支并推送到 `origin/beta`，不直接推送 `origin/master`。
 - 仅当用户明确指示合并时，才把 `beta` 合并到 `master` 并推送 `origin/master`。
 - 未合并到 `master` 的更新以 `beta` 分支为准；需要试用时切换到 `beta` 分支部署。
+- 2026-08-24 已按用户指示把 reasoning 历史整理、`web_search_call` 过滤、OpenRouter Ox Alpha 接入和脱敏诊断日志移植到 `master`；DeepSeek Pro 的 `we_need` 推理风格提示保留在 `beta`，未合并。
 
 ## Codex 配置
 
