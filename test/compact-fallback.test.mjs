@@ -36,7 +36,7 @@ function startMockUpstream({ failModels = new Set() } = {}) {
   });
 }
 
-function startProxy(upstreamBaseUrl) {
+function startProxy(upstreamBaseUrl, { env = {}, logger = silentLogger } = {}) {
   const config = {
     compact_fallback_model: 'flash-model',
     models: {
@@ -58,8 +58,8 @@ function startProxy(upstreamBaseUrl) {
   const server = createProxyServer({
     config,
     secrets: { FLASH_API_KEY: 'flash-test-key' },
-    logger: silentLogger,
-    env: {},
+    logger,
+    env,
   });
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => resolve({
@@ -86,9 +86,9 @@ async function closeServer(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
-async function withProxy(mockOptions, fn) {
+async function withProxy(mockOptions, fn, proxyOptions = {}) {
   const upstream = await startMockUpstream(mockOptions);
-  const proxy = await startProxy(upstream.baseUrl);
+  const proxy = await startProxy(upstream.baseUrl, proxyOptions);
   try {
     await fn(upstream, proxy);
   } finally {
@@ -123,6 +123,32 @@ test('默认模型返回非 2xx 后改用 Flash', async () => {
     ]);
     assert.equal(upstream.seen[1].auth, 'Bearer flash-test-key');
   });
+});
+
+test('压缩请求首次和备用请求分别选择网络路径', async () => {
+  const logs = [];
+  const logger = {
+    info: (message) => logs.push(message),
+    error: (message) => logs.push(message),
+    warn: (message) => logs.push(message),
+  };
+  await withProxy(
+    { failModels: new Set(['default-upstream']) },
+    async (upstream, proxy) => {
+      const result = await postCompact(proxy.baseUrl, 'default-model');
+      assert.equal(result.status, 200);
+      assert.ok(logs.some((message) => message.includes('model=default-model network=proxy')));
+      assert.ok(logs.some((message) => message.includes('model=flash-model network=direct')));
+      assert.equal(upstream.seen.length, 2);
+    },
+    {
+      env: {
+        PROXY_URL: 'http://127.0.0.1:7890',
+        DIRECT_MODELS: ' flash-model ',
+      },
+      logger,
+    },
+  );
 });
 
 test('请求本身已是 Flash 时失败后不重复请求', async () => {

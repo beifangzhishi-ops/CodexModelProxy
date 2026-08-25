@@ -44,7 +44,7 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 1. 安装 Node.js（本项目只用内置模块，无需安装任何依赖）。
 2. 把仓库克隆到本机任意目录。
 3. 复制 `proxy-secrets.env.example` 为 `proxy-secrets.env`，填写 `OPENCODE_API_KEY`、`DEEPSEEK_API_KEY` 与 `OPENROUTER_API_KEY`。该文件已被 Git 忽略，不会提交，各机器填各自的密钥。
-4. 若上游需要走代理（OpenCode 有区域限制，一般需要本机代理），复制 `proxy-local.env.example` 为 `proxy-local.env`，按本机代理端口修改 `PROXY_URL`；不需要代理时把值留空。启用本地访问令牌时在此文件加 `PROXY_ACCESS_TOKEN=...`。
+4. 复制 `proxy-local.env.example` 为 `proxy-local.env`，按本机代理端口修改 `PROXY_URL`；需要绕过代理的模型写入 `DIRECT_MODELS`，未列入白名单的模型默认走 `PROXY_URL`。启用本地访问令牌时在此文件加 `PROXY_ACCESS_TOKEN=...`。
 5. 双击或运行 `start-proxy.cmd` 启动中转。浏览器打开 `http://127.0.0.1:8787/healthz`，应返回 `{"status":"ok"}`。
 6. 按下方“Codex 配置”准备三处文件并运行切换脚本。
 7. 重新加载 Codex 配置与模型目录（模型目录缓存到 App Server 重启后刷新）。
@@ -65,7 +65,7 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 统一配置涉及三处文件：仓库内的 `proxy-secrets.env` 与 `proxy-local.env` 保存本机差异，`C:\Users\noha\.codex\config_unified.toml` 是 Codex 的备用统一配置模板。
 
 1. `proxy-secrets.env`：填写 `OPENCODE_API_KEY`、`DEEPSEEK_API_KEY` 与 `OPENROUTER_API_KEY`，两个 OC 路由、两个直连 DeepSeek 路由和 Ox Alpha 路由分别使用它们。
-2. `proxy-local.env`：设置本机 `PROXY_URL`、`HOST`、`PORT`；启用本地访问令牌时加 `PROXY_ACCESS_TOKEN=...`，其值必须与下方 `http_headers` 中的一致。
+2. `proxy-local.env`：设置本机 `PROXY_URL`、`DIRECT_MODELS`、`HOST`、`PORT`；启用本地访问令牌时加 `PROXY_ACCESS_TOKEN=...`，其值必须与下方 `http_headers` 中的一致。
 3. `config_unified.toml`（位于 `%USERPROFILE%\.codex`）：
 
 ```toml
@@ -134,15 +134,18 @@ codex exec -m ox-alpha "提示词"
 | `config-templates/` | Codex 配置切换脚本示例（脱敏模板，复制到 `%USERPROFILE%\.codex` 后按本机修改） |
 | `test/proxy.test.mjs`、`test/compact-fallback.test.mjs`、`test/history-normalize.test.mjs` | 自动测试（内存 mock 上游，不消耗真实额度） |
 
-## 代理设置
+## 上游网络路径
 
-上游请求可走 HTTP 代理。OpenCode 会对直连出口做区域限制（返回 403 "This model is not available in your region."），一般需要走本机代理（例如 FlClash 默认端口 7890）。在 `proxy-local.env` 中设置：
+Codex 始终先访问本地中转 `127.0.0.1:8787`；本节配置的是本地中转访问外部上游时是否经过 HTTP 代理。默认情况下，设置了 `PROXY_URL` 的模型都会经过该代理；`DIRECT_MODELS` 中的模型会绕过代理直连上游。
 
 ```text
 PROXY_URL=http://127.0.0.1:7890
+DIRECT_MODELS=deepseek-v4-flash,deepseek-v4-pro,deepseek-v4-flash-direct,deepseek-v4-pro-direct
 ```
 
-不需要代理时把值留空或删除该行。服务端也支持直接用进程环境变量 `PROXY_URL` / `HOST` / `PORT` / `PROXY_ACCESS_TOKEN` 覆盖。
+当前默认路径为：GPT 三个模型和 Ox Alpha 走代理，OC 两个模型和 DeepSeek 两个直连模型绕过代理。将模型 slug 加入或移出 `DIRECT_MODELS` 后，重启本地中转即可生效，不需要修改 Codex 配置或刷新模型目录。白名单中的 slug 必须是 `proxy-config.json` 中已有的模型。
+
+不需要任何上游代理时把 `PROXY_URL` 留空或删除该行。服务端也支持直接用进程环境变量 `PROXY_URL` / `DIRECT_MODELS` / `HOST` / `PORT` / `PROXY_ACCESS_TOKEN` 覆盖。
 
 ## 测试
 
@@ -168,7 +171,7 @@ node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fal
 - 启动失败提示缺少密钥：检查 `proxy-secrets.env` 中的变量名和值。
 - 停止代理后 Codex 立即断连：这是预期行为，代理就是 Codex 的通道；更新代码或重启代理前，先切换到直连配置，完成后再切回。
 - 端口被占用：在 `proxy-local.env` 中修改 `PORT`，并同步修改 Codex 配置 `base_url` 的端口。
-- OpenCode 返回 403 区域限制：确认 `proxy-local.env` 已配置 `PROXY_URL` 且本机代理正在运行。
+- OpenCode 返回 403 区域限制：如果希望 OpenCode 走代理，请从 `DIRECT_MODELS` 删除对应的 OC 模型 slug，并确认 `PROXY_URL` 已配置且本机代理正在运行。
 - 模型列表不对：确认 `model_catalog_json` 指向本机克隆目录的 `models_unified.json`，并重启 Codex App Server。
 - GPT 模型返回 401：确认 Codex 已完成 ChatGPT 登录，且 `forced_login_method = "chatgpt"`、`requires_openai_auth = true`。
 

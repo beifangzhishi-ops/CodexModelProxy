@@ -29,8 +29,10 @@ export async function forwardCompactWithFallback({
   secrets,
   logger,
   proxyUrl,
+  proxyUrlForModel,
   env,
 }) {
+  const selectProxyUrl = proxyUrlForModel || (() => proxyUrl || '');
   let activeRequest;
   let clientClosed = false;
   const onClientClose = () => {
@@ -40,6 +42,7 @@ export async function forwardCompactWithFallback({
   res.once('close', onClientClose);
 
   const attempt = async (attemptSlug, attemptRoute) => {
+    const attemptProxyUrl = selectProxyUrl(attemptSlug);
     const {
       body: normalizedBody,
       removedReasoningIndexes,
@@ -66,14 +69,14 @@ export async function forwardCompactWithFallback({
       slug: attemptSlug,
       route: attemptRoute,
       secrets,
-      proxyUrl,
+      proxyUrl: attemptProxyUrl,
       env,
       onRequest(outgoing) {
         activeRequest = outgoing;
       },
     });
     activeRequest = undefined;
-    return result;
+    return { ...result, proxyUrl: attemptProxyUrl };
   };
 
   try {
@@ -285,14 +288,15 @@ function isSuccessful(result) {
 }
 
 function logAttempt(logger, slug, result) {
+  const networkMode = result.proxyUrl ? 'proxy' : 'direct';
   if (result.error) {
     logger.error(
-      `[codex-proxy] POST /v1/responses/compact model=${slug} -> ${result.upstreamHost} err=${result.error.message}`,
+      `[codex-proxy] POST /v1/responses/compact model=${slug} network=${networkMode} -> ${result.upstreamHost} err=${result.error.message}`,
     );
     return;
   }
   logger.info(
-    `[codex-proxy] POST /v1/responses/compact model=${slug} -> ${result.upstreamHost} status=${result.status}`,
+    `[codex-proxy] POST /v1/responses/compact model=${slug} network=${networkMode} -> ${result.upstreamHost} status=${result.status}`,
   );
 }
 

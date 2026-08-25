@@ -30,6 +30,27 @@ const HOP_BY_HOP_HEADERS = new Set([
   'upgrade',
 ]);
 
+export function parseDirectModels(raw, routes) {
+  const normalized = raw == null ? '' : String(raw);
+  const models = [...new Set(
+    normalized
+      .split(',')
+      .map((slug) => slug.trim())
+      .filter(Boolean),
+  )];
+  const unknownModels = models.filter(
+    (slug) => !Object.prototype.hasOwnProperty.call(routes || {}, slug),
+  );
+  if (unknownModels.length > 0) {
+    throw new Error(`DIRECT_MODELS 包含未知模型：${unknownModels.join('、')}`);
+  }
+  return new Set(models);
+}
+
+export function resolveProxyUrl(proxyUrl, directModels, slug) {
+  return directModels.has(slug) ? '' : proxyUrl;
+}
+
 export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT_CONFIG_FILE) {
   const resolvedConfigFile = path.resolve(configFile);
   let raw;
@@ -117,12 +138,22 @@ export function loadSecrets(secretsFile = process.env.PROXY_SECRETS_FILE || DEFA
   return secrets;
 }
 
-export function createProxyServer({ config, secrets, logger = console, env = process.env }) {
+export function createProxyServer({
+  config,
+  secrets,
+  logger = console,
+  env = process.env,
+  directModels: configuredDirectModels,
+}) {
   const routes = config.models || {};
   const catalogModels = Array.isArray(config.catalog?.models) ? config.catalog.models : null;
   const compactFallbackSlug = config.compact_fallback_model || 'deepseek-v4-flash';
   const accessToken = (env.PROXY_ACCESS_TOKEN || config.access_token || '').trim();
-  const proxyUrl = env.PROXY_URL || config.proxy || '';
+  const proxyUrl = env.PROXY_URL !== undefined
+    ? String(env.PROXY_URL).trim()
+    : String(config.proxy || '').trim();
+  const directModels = configuredDirectModels || parseDirectModels(env.DIRECT_MODELS, routes);
+  const proxyUrlForModel = (slug) => resolveProxyUrl(proxyUrl, directModels, slug);
   const requireToken = accessToken.length > 0;
 
   function isAuthorized(req) {
@@ -177,7 +208,7 @@ export function createProxyServer({ config, secrets, logger = console, env = pro
           });
           return;
         }
-        forwardToUpstream(req, res, body, model, route, secrets, logger, proxyUrl, env);
+        forwardToUpstream(req, res, body, model, route, secrets, logger, proxyUrlForModel(model), env);
       });
       return;
     }
@@ -210,6 +241,7 @@ export function createProxyServer({ config, secrets, logger = console, env = pro
           secrets,
           logger,
           proxyUrl,
+          proxyUrlForModel,
           env,
         });
       });
@@ -439,6 +471,7 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
   }
   const lib = upstreamUrl.protocol === 'https:' ? https : http;
   const agent = upstreamUrl.protocol === 'https:' && proxyUrl ? createProxyAgent(proxyUrl) : undefined;
+  const networkMode = proxyUrl ? 'proxy' : 'direct';
   const {
     body: normalizedBody,
     removedReasoningIndexes,
@@ -502,11 +535,11 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
       upRes.on('end', () => {
         const raw = Buffer.concat(errChunks).toString('utf8');
         logger.error(
-          `[codex-proxy] 上游诊断 model=${slug} status=${status} bytes=${Buffer.byteLength(upstreamBody)} ${extractUpstreamErrorDetail(raw)} 输入[${formatCounts(requestSummary.inputTypes)}] 工具[${formatCounts(requestSummary.toolLabels)}] 孤立调用=${requestSummary.missingOutputs} 孤立输出=${requestSummary.missingCalls}`,
+          `[codex-proxy] 上游诊断 model=${slug} network=${networkMode} status=${status} bytes=${Buffer.byteLength(upstreamBody)} ${extractUpstreamErrorDetail(raw)} 输入[${formatCounts(requestSummary.inputTypes)}] 工具[${formatCounts(requestSummary.toolLabels)}] 孤立调用=${requestSummary.missingOutputs} 孤立输出=${requestSummary.missingCalls}`,
         );
       });
     } else {
-      logger.info(`[codex-proxy] POST /v1/responses model=${slug} -> ${upstreamUrl.host} status=${status}`);
+      logger.info(`[codex-proxy] POST /v1/responses model=${slug} network=${networkMode} -> ${upstreamUrl.host} status=${status}`);
     }
     res.writeHead(status, outHeaders);
     upRes.pipe(res);
@@ -522,7 +555,7 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
     } else {
       res.destroy();
     }
-    logger.error(`[codex-proxy] 上游错误 model=${slug} -> ${upstreamUrl.host} err=${err.message}`);
+    logger.error(`[codex-proxy] 上游错误 model=${slug} network=${networkMode} -> ${upstreamUrl.host} err=${err.message}`);
   });
   res.on('close', () => outgoing.destroy());
   outgoing.end(upstreamBody);
@@ -568,7 +601,15 @@ if (isMain()) {
   const host = env.HOST || config.host || '127.0.0.1';
   const port = Number(env.PORT) || (config.port ?? 8787);
   const pidFile = path.resolve(__dirname, config.pid_file || 'proxy.pid');
-  const server = createProxyServer({ config, secrets, env });
+  let directModels;
+  let server;
+  try {
+    directModels = parseDirectModels(env.DIRECT_MODELS, config.models);
+    server = createProxyServer({ config, secrets, env, directModels });
+  } catch (err) {
+    console.error(`[codex-proxy] 启动失败：${err.message}`);
+    process.exit(1);
+  }
   server.on('error', (err) => {
     console.error(`[codex-proxy] 服务错误：${err.message}`);
     removePidFile(pidFile);
@@ -578,6 +619,7 @@ if (isMain()) {
     writePidFile(pidFile, process.pid);
     console.log(`[codex-proxy] 已启动：http://${host}:${port}`);
     console.log(`[codex-proxy] 模型路由：${Object.keys(config.models).join('、')}`);
+    console.log(`[codex-proxy] 上游网络：默认${(env.PROXY_URL !== undefined ? String(env.PROXY_URL).trim() : String(config.proxy || '').trim()) ? '代理' : '直连'}；直连白名单：${[...directModels].join('、') || '(空)'}`);
   });
   const shutdown = () => {
     removePidFile(pidFile);

@@ -2,7 +2,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { createProxyServer, loadConfig, loadSecrets } from '../server.mjs';
+import {
+  createProxyServer,
+  loadConfig,
+  loadSecrets,
+  parseDirectModels,
+  resolveProxyUrl,
+} from '../server.mjs';
 
 const MODEL_SLUGS = [
   'gpt-5.6-sol',
@@ -16,6 +22,29 @@ const MODEL_SLUGS = [
 ];
 
 const silentLogger = { info() {}, error() {}, warn() {} };
+
+test('直连白名单会去空格去重，并拒绝未知模型', () => {
+  const routes = { first: {}, second: {} };
+  assert.deepEqual(
+    [...parseDirectModels(' first, first, second , ', routes)],
+    ['first', 'second'],
+  );
+  assert.deepEqual([...parseDirectModels('', routes)], []);
+  assert.throws(
+    () => parseDirectModels('first,missing-model', routes),
+    /DIRECT_MODELS 包含未知模型：missing-model/,
+  );
+});
+
+test('直连白名单只改变上游代理选择', () => {
+  const directModels = parseDirectModels('direct-model', {
+    'proxy-model': {},
+    'direct-model': {},
+  });
+  assert.equal(resolveProxyUrl('http://127.0.0.1:7890', directModels, 'proxy-model'), 'http://127.0.0.1:7890');
+  assert.equal(resolveProxyUrl('http://127.0.0.1:7890', directModels, 'direct-model'), '');
+  assert.equal(resolveProxyUrl('', directModels, 'proxy-model'), '');
+});
 
 function testRoutes(mockBaseUrl) {
   return {
@@ -314,6 +343,39 @@ test('进程环境变量优先于密钥文件，日志不泄露密钥', async ()
     {
       secrets: { OPENCODE_API_KEY: 'file-open-key', DEEPSEEK_API_KEY: 'file-deep-key' },
       env: { OPENCODE_API_KEY: 'env-open-key', DEEPSEEK_API_KEY: 'env-deep-key' },
+      logger,
+    },
+  );
+});
+
+test('普通请求按 DIRECT_MODELS 选择代理或直连', async () => {
+  const logs = [];
+  const logger = {
+    info: (message) => logs.push(message),
+    error: (message) => logs.push(message),
+    warn() {},
+  };
+  await withServers(
+    async (mock, proxy) => {
+      await postJson(
+        proxy.baseUrl,
+        { model: 'gpt-5.6-sol', input: 'hello' },
+        { authorization: 'Bearer chatgpt-login-token' },
+      );
+      await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input: 'hello' });
+      await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash-direct', input: 'hello' });
+      await postJson(proxy.baseUrl, { model: 'ox-alpha', input: 'hello' });
+      assert.ok(logs.some((message) => message.includes('model=gpt-5.6-sol network=proxy')));
+      assert.ok(logs.some((message) => message.includes('model=deepseek-v4-flash network=direct')));
+      assert.ok(logs.some((message) => message.includes('model=deepseek-v4-flash-direct network=direct')));
+      assert.ok(logs.some((message) => message.includes('model=ox-alpha network=proxy')));
+      assert.equal(mock.seen.length, 4);
+    },
+    {
+      env: {
+        PROXY_URL: 'http://127.0.0.1:7890',
+        DIRECT_MODELS: ' deepseek-v4-flash, deepseek-v4-flash-direct ',
+      },
       logger,
     },
   );
