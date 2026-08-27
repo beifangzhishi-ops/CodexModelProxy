@@ -9,54 +9,54 @@
       "upstream_base_url": "https://chatgpt.com/backend-api/codex",
       "upstream_model": "gpt-5.6-sol",
       "auth_mode": "openai_passthrough",
-      "reasoning_format": "passthrough"
+      "reasoning_format": "openai_encrypted"
     },
     "gpt-5.6-terra": {
       "upstream_base_url": "https://chatgpt.com/backend-api/codex",
       "upstream_model": "gpt-5.6-terra",
       "auth_mode": "openai_passthrough",
-      "reasoning_format": "passthrough"
+      "reasoning_format": "openai_encrypted"
     },
     "gpt-5.6-luna": {
       "upstream_base_url": "https://chatgpt.com/backend-api/codex",
       "upstream_model": "gpt-5.6-luna",
       "auth_mode": "openai_passthrough",
-      "reasoning_format": "passthrough"
+      "reasoning_format": "openai_encrypted"
     },
     "deepseek-v4-flash": {
       "upstream_base_url": "https://opencode.ai/zen/go/v1",
       "upstream_model": "deepseek-v4-flash",
       "auth_mode": "api_key",
       "api_key_env": "OPENCODE_API_KEY",
-      "reasoning_format": "passthrough"
+      "reasoning_format": "deepseek_plaintext"
     },
     "deepseek-v4-pro": {
       "upstream_base_url": "https://opencode.ai/zen/go/v1",
       "upstream_model": "deepseek-v4-pro",
       "auth_mode": "api_key",
       "api_key_env": "OPENCODE_API_KEY",
-      "reasoning_format": "passthrough"
+      "reasoning_format": "deepseek_plaintext"
     },
     "deepseek-v4-flash-direct": {
       "upstream_base_url": "https://api.deepseek.com/",
       "upstream_model": "deepseek-v4-flash",
       "auth_mode": "api_key",
       "api_key_env": "DEEPSEEK_API_KEY",
-      "reasoning_format": "passthrough"
+      "reasoning_format": "deepseek_plaintext"
     },
     "deepseek-v4-pro-direct": {
       "upstream_base_url": "https://api.deepseek.com/",
       "upstream_model": "deepseek-v4-pro",
       "auth_mode": "api_key",
       "api_key_env": "DEEPSEEK_API_KEY",
-      "reasoning_format": "passthrough"
+      "reasoning_format": "deepseek_plaintext"
     },
     "ox-alpha": {
       "upstream_base_url": "https://openrouter.ai/api/v1",
       "upstream_model": "stealth/ox-alpha",
       "auth_mode": "api_key",
       "api_key_env": "OPENROUTER_API_KEY",
-      "reasoning_format": "passthrough"
+      "reasoning_format": "openrouter_compatible"
     }
   }
 }
