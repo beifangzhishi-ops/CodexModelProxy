@@ -52,54 +52,54 @@ function testRoutes(mockBaseUrl) {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'gpt-5.6-sol',
       auth_mode: 'openai_passthrough',
-      reasoning_format: 'openai_encrypted',
+      reasoning_format: 'passthrough',
     },
     'gpt-5.6-terra': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'gpt-5.6-terra',
       auth_mode: 'openai_passthrough',
-      reasoning_format: 'openai_encrypted',
+      reasoning_format: 'passthrough',
     },
     'gpt-5.6-luna': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'gpt-5.6-luna',
       auth_mode: 'openai_passthrough',
-      reasoning_format: 'openai_encrypted',
+      reasoning_format: 'passthrough',
     },
     'deepseek-v4-flash': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'deepseek-v4-flash',
       auth_mode: 'api_key',
       api_key_env: 'OPENCODE_API_KEY',
-      reasoning_format: 'deepseek_plaintext',
+      reasoning_format: 'passthrough',
     },
     'deepseek-v4-pro': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'deepseek-v4-pro',
       auth_mode: 'api_key',
       api_key_env: 'OPENCODE_API_KEY',
-      reasoning_format: 'deepseek_plaintext',
+      reasoning_format: 'passthrough',
     },
     'deepseek-v4-flash-direct': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'deepseek-v4-flash',
       auth_mode: 'api_key',
       api_key_env: 'DEEPSEEK_API_KEY',
-      reasoning_format: 'deepseek_plaintext',
+      reasoning_format: 'passthrough',
     },
     'deepseek-v4-pro-direct': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'deepseek-v4-pro',
       auth_mode: 'api_key',
       api_key_env: 'DEEPSEEK_API_KEY',
-      reasoning_format: 'deepseek_plaintext',
+      reasoning_format: 'passthrough',
     },
     'ox-alpha': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'stealth/ox-alpha',
       auth_mode: 'api_key',
       api_key_env: 'OPENROUTER_API_KEY',
-      reasoning_format: 'openrouter_compatible',
+      reasoning_format: 'passthrough',
     },
   };
 }
@@ -406,11 +406,14 @@ test('生产配置的路由与统一模型目录严格对应', () => {
   const config = loadConfig();
   assert.deepEqual(Object.keys(config.models), MODEL_SLUGS);
   assert.deepEqual(config.catalog.models.map((model) => model.slug), MODEL_SLUGS);
+  assert.deepEqual(
+    MODEL_SLUGS.map((slug) => config.models[slug].reasoning_format),
+    Array(MODEL_SLUGS.length).fill('passthrough'),
+  );
   assert.equal(config.models['deepseek-v4-flash'].auth_mode, 'api_key');
   assert.equal(config.models['gpt-5.6-sol'].auth_mode, 'openai_passthrough');
   assert.equal(config.models['ox-alpha'].upstream_model, 'stealth/ox-alpha');
   assert.equal(config.models['ox-alpha'].api_key_env, 'OPENROUTER_API_KEY');
-  assert.equal(config.models['ox-alpha'].reasoning_format, 'openrouter_compatible');
 });
 
 test('密钥文件缺失时返回空对象', () => {
@@ -435,52 +438,24 @@ const userMessageFixture = {
   content: [{ type: 'input_text', text: 'hello' }],
 };
 
-test('发往 GPT 时移除 DS 明文 reasoning，保留 GPT 加密 reasoning', async () => {
-  await withServers(async (mock, proxy) => {
-    const body = {
-      model: 'gpt-5.6-sol',
-      input: [dsReasoningFixture, gptReasoningFixture, userMessageFixture],
-    };
-    const result = await postJson(
-      proxy.baseUrl,
-      body,
-      { authorization: 'Bearer chatgpt-login-token' },
-    );
-    assert.equal(result.status, 200);
-    assert.deepEqual(mock.seen[0].body.input, [gptReasoningFixture, userMessageFixture]);
-  });
-});
-
-test('发往 DS 时移除 GPT 加密 reasoning，保留 DS 明文 reasoning', async () => {
-  await withServers(async (mock, proxy) => {
-    const body = {
-      model: 'deepseek-v4-flash',
-      input: [gptReasoningFixture, dsReasoningFixture, userMessageFixture],
-    };
-    const result = await postJson(proxy.baseUrl, body);
-    assert.equal(result.status, 200);
-    assert.deepEqual(mock.seen[0].body.input, [dsReasoningFixture, userMessageFixture]);
-  });
-});
-
-test('混合历史分别发往 GPT、OC DS 与直连 DS 时只保留各自兼容格式', async () => {
+test('八条生产路由均原样保留混合 reasoning', async () => {
   await withServers(async (mock, proxy) => {
     const input = [dsReasoningFixture, gptReasoningFixture, userMessageFixture];
-    await postJson(
-      proxy.baseUrl,
-      { model: 'gpt-5.6-terra', input },
-      { authorization: 'Bearer chatgpt-login-token' },
-    );
-    await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input });
-    await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash-direct', input });
-
-    assert.deepEqual(mock.seen[0].body.input, [gptReasoningFixture, userMessageFixture]);
-    assert.deepEqual(mock.seen[1].body.input, [dsReasoningFixture, userMessageFixture]);
-    assert.deepEqual(mock.seen[2].body.input, [dsReasoningFixture, userMessageFixture]);
+    for (const slug of MODEL_SLUGS) {
+      const headers = slug.startsWith('gpt-')
+        ? { authorization: 'Bearer chatgpt-login-token' }
+        : {};
+      const result = await postJson(proxy.baseUrl, { model: slug, input }, headers);
+      assert.equal(result.status, 200);
+    }
+    assert.equal(mock.seen.length, MODEL_SLUGS.length);
+    for (let index = 0; index < MODEL_SLUGS.length; index++) {
+      assert.deepEqual(mock.seen[index].body.input, input);
+    }
   });
 });
 
-test('畸形与不完整 reasoning 对 GPT 和 DS 均安全移除', async () => {
+test('畸形与不完整 reasoning 在 passthrough 路由中原样转发', async () => {
   await withServers(async (mock, proxy) => {
     const malformed = [
       { type: 'reasoning' },
@@ -494,15 +469,17 @@ test('畸形与不完整 reasoning 对 GPT 和 DS 均安全移除', async () => 
       },
       userMessageFixture,
     ];
-    await postJson(
-      proxy.baseUrl,
-      { model: 'gpt-5.6-luna', input: malformed },
-      { authorization: 'Bearer chatgpt-login-token' },
-    );
-    assert.deepEqual(mock.seen[0].body.input, [userMessageFixture]);
-
-    await postJson(proxy.baseUrl, { model: 'deepseek-v4-pro', input: malformed });
-    assert.deepEqual(mock.seen[1].body.input, [userMessageFixture]);
+    for (const slug of MODEL_SLUGS) {
+      const headers = slug.startsWith('gpt-')
+        ? { authorization: 'Bearer chatgpt-login-token' }
+        : {};
+      const result = await postJson(proxy.baseUrl, { model: slug, input: malformed }, headers);
+      assert.equal(result.status, 200);
+    }
+    assert.equal(mock.seen.length, MODEL_SLUGS.length);
+    for (let index = 0; index < MODEL_SLUGS.length; index++) {
+      assert.deepEqual(mock.seen[index].body.input, malformed);
+    }
   });
 });
 
@@ -534,13 +511,13 @@ test('普通消息、工具调用、搜索与压缩项在历史整理中保持�
       { model: 'gpt-5.6-sol', input: [dsReasoningFixture, ...preserved] },
       { authorization: 'Bearer chatgpt-login-token' },
     );
-    assert.deepEqual(mock.seen[0].body.input, preserved);
+    assert.deepEqual(mock.seen[0].body.input, [dsReasoningFixture, ...preserved]);
 
     await postJson(
       proxy.baseUrl,
       { model: 'deepseek-v4-flash', input: [gptReasoningFixture, ...preserved] },
     );
-    assert.deepEqual(mock.seen[1].body.input, preserved);
+    assert.deepEqual(mock.seen[1].body.input, [gptReasoningFixture, ...preserved]);
   });
 });
 
@@ -567,7 +544,7 @@ test('字符串 input 与不含 reasoning 的 input 保持原样', async () => {
   });
 });
 
-test('历史整理日志只记录数量，不泄露推理正文', async () => {
+test('passthrough 不生成历史整理日志且不泄露推理正文', async () => {
   const logs = [];
   const logger = { info: (message) => logs.push(message), error() {}, warn() {} };
   await withServers(
@@ -577,8 +554,9 @@ test('历史整理日志只记录数量，不泄露推理正文', async () => {
         { model: 'gpt-5.6-sol', input: [dsReasoningFixture, gptReasoningFixture, userMessageFixture] },
         { authorization: 'Bearer chatgpt-login-token' },
       );
-      assert.ok(logs.some((message) => message.includes('历史整理：移除 reasoning 1 项')));
+      assert.ok(logs.every((message) => !message.includes('历史整理：移除')));
       assert.ok(logs.every((message) => !message.includes('ds-thought') && !message.includes('opaque-gpt')));
+      assert.deepEqual(mock.seen[0].body.input, [dsReasoningFixture, gptReasoningFixture, userMessageFixture]);
     },
     { logger },
   );
@@ -596,31 +574,24 @@ const gptWebSearchFixture = {
   status: 'completed',
 };
 
-test('发往 GPT 时移除 DS 风格 web_search_call，保留 ws_ 前缀记录', async () => {
-  await withServers(async (mock, proxy) => {
-    const result = await postJson(
-      proxy.baseUrl,
-      {
-        model: 'gpt-5.6-sol',
-        input: [dsWebSearchFixture, gptWebSearchFixture, userMessageFixture],
-      },
-      { authorization: 'Bearer chatgpt-login-token' },
-    );
-    assert.equal(result.status, 200);
-    assert.deepEqual(mock.seen[0].body.input, [gptWebSearchFixture, userMessageFixture]);
-  });
-});
-
-test('发往 DS 时保留全部 web_search_call', async () => {
+test('八条生产路由均原样保留 web_search_call', async () => {
   await withServers(async (mock, proxy) => {
     const input = [dsWebSearchFixture, gptWebSearchFixture];
-    const result = await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input });
-    assert.equal(result.status, 200);
-    assert.deepEqual(mock.seen[0].body.input, input);
+    for (const slug of MODEL_SLUGS) {
+      const headers = slug.startsWith('gpt-')
+        ? { authorization: 'Bearer chatgpt-login-token' }
+        : {};
+      const result = await postJson(proxy.baseUrl, { model: slug, input }, headers);
+      assert.equal(result.status, 200);
+    }
+    assert.equal(mock.seen.length, MODEL_SLUGS.length);
+    for (let index = 0; index < MODEL_SLUGS.length; index++) {
+      assert.deepEqual(mock.seen[index].body.input, input);
+    }
   });
 });
 
-test('历史整理日志记录 web_search_call 数量，不泄露搜索 ID', async () => {
+test('passthrough 不生成 web_search_call 历史整理日志', async () => {
   const logs = [];
   const logger = { info: (message) => logs.push(message), error() {}, warn() {} };
   await withServers(
@@ -630,10 +601,11 @@ test('历史整理日志记录 web_search_call 数量，不泄露搜索 ID', asy
         { model: 'gpt-5.6-sol', input: [dsWebSearchFixture, userMessageFixture] },
         { authorization: 'Bearer chatgpt-login-token' },
       );
-      assert.ok(logs.some((message) => message.includes('web_search_call 1 项')));
+      assert.ok(logs.every((message) => !message.includes('历史整理：移除')));
       assert.ok(
         logs.every((message) => !message.includes('call_00_bXZiVEuheXGCpYHtDOCm5367')),
       );
+      assert.deepEqual(mock.seen[0].body.input, [dsWebSearchFixture, userMessageFixture]);
     },
     { logger },
   );
