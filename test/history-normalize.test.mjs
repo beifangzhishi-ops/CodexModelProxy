@@ -24,6 +24,13 @@ const gptReasoning = {
   content: [],
 };
 
+const foreignReasoningReference = {
+  type: 'reasoning',
+  id: 'rs_foreign_reference',
+  content: null,
+  encrypted_content: '01234567-89ab-cdef-0123-456789abcdef-0',
+};
+
 const userMessage = {
   type: 'message',
   role: 'user',
@@ -59,6 +66,25 @@ test('GPT 目标保留 reasoning 项，仅清空冲突的明文 content', () => 
   assert.deepEqual(body.input, [dsReasoning, gptReasoning, userMessage]);
   assert.notEqual(result.body, body);
   assert.notEqual(result.body.input[0], dsReasoning);
+  assert.equal(result.body.input[1], gptReasoning);
+});
+
+test('GPT 目标仅清空 OC/DS 外部 reasoning 引用，保留项目和原请求', () => {
+  const body = { input: [foreignReasoningReference, gptReasoning, userMessage] };
+  const result = normalizeResponsesBody(body, GPT);
+
+  assert.deepEqual(result.body.input, [
+    { ...foreignReasoningReference, content: [], encrypted_content: null },
+    gptReasoning,
+    userMessage,
+  ]);
+  assert.deepEqual(result.normalizedReasoningIndexes, [0]);
+  assert.deepEqual(result.reasoningChanges, [{
+    index: 0,
+    fields: ['content', 'encrypted_content'],
+  }]);
+  assert.deepEqual(body.input, [foreignReasoningReference, gptReasoning, userMessage]);
+  assert.equal(result.body.input[0].id, foreignReasoningReference.id);
   assert.equal(result.body.input[1], gptReasoning);
 });
 

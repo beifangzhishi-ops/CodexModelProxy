@@ -25,7 +25,7 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 
 - 只处理 `POST /v1/responses`、`POST /v1/responses/compact` 与 `GET /v1/models`；所有路由固定追加 `/responses`。
 - 请求体除 `model` 替换为实际上游模型名外，还会按目标模型的 reasoning 格式整理推理历史；JSON 与 SSE 响应状态、响应头和正文原样返回。
-- 跨 GPT/DeepSeek 切换时保留所有 reasoning 项和项目顺序，只清空冲突字段：GPT 路由把非空或格式不兼容的 `content` 改为 `[]`，保留 `encrypted_content`；OpenCode、直连 DeepSeek 与 OpenRouter 路由把已有的 `encrypted_content` 改为 `null`，保留明文 `content`。整理只影响本次上游请求，不修改 Codex 原会话，也不尝试恢复或伪造密文。
+- 跨 GPT/DeepSeek 切换时保留所有 reasoning 项和项目顺序，只清空冲突字段：GPT 路由把非空或格式不兼容的 `content` 改为 `[]`；若发现 OC/DS 使用的“UUID + 分段号”外部引用误放在 `encrypted_content`，仅将该字段改为 `null`，正常 GPT 密文继续保留。OpenCode、直连 DeepSeek 与 OpenRouter 路由把已有的 `encrypted_content` 改为 `null`，保留明文 `content`。整理只影响本次上游请求，不修改 Codex 原会话，也不尝试恢复或伪造密文。
 - 跨模型切换时同步整理网页搜索记录：GPT 路由只保留 `id` 以 `ws` 开头的 `web_search_call`，DS/Codex 风格的 `call_...` 搜索调用项从本次上游请求移除；助手消息中的搜索结论与引用不受影响。
 - OpenRouter 路由清空 reasoning 的 `encrypted_content`，并移除 OpenRouter 不接受的 `web_search_call`；普通消息、函数调用和工具结果不改名。
 - 每条路由可设置 `tool_output_format`：默认 `passthrough`；四条 OC/直连 DeepSeek 路由使用 `json_string`，将 `function_call_output` 与 `custom_tool_call_output` 中的非字符串 `output` 完整 `JSON.stringify` 为文本，字符串保持不变。GPT 与 Ox 使用 `passthrough`，数组中的图片、`call_id`、项目顺序均保留。

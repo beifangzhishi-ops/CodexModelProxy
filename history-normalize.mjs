@@ -15,6 +15,9 @@ export const TOOL_OUTPUT_FORMATS = Object.freeze({
 
 const VALID_FORMATS = new Set(Object.values(REASONING_FORMATS));
 const VALID_TOOL_OUTPUT_FORMATS = new Set(Object.values(TOOL_OUTPUT_FORMATS));
+// OC/DS 会把自己的 reasoning 分段引用写进 encrypted_content；GPT 不应尝试验证这种外部引用。
+const FOREIGN_ENCRYPTED_CONTENT_REFERENCE =
+  /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}-\d+$/i;
 
 export function isValidReasoningFormat(value) {
   return VALID_FORMATS.has(value);
@@ -145,6 +148,13 @@ function normalizeReasoningItem(item, reasoningFormat) {
     if (contentConflicts) {
       normalizedItem = { ...normalizedItem, content: [] };
       fields.push('content');
+    }
+    if (
+      typeof item.encrypted_content === 'string' &&
+      FOREIGN_ENCRYPTED_CONTENT_REFERENCE.test(item.encrypted_content)
+    ) {
+      normalizedItem = { ...normalizedItem, encrypted_content: null };
+      fields.push('encrypted_content');
     }
   }
   if (
