@@ -11,7 +11,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { forwardCompactWithFallback } from './compact-forward.mjs';
-import { normalizeResponsesBody, isValidReasoningFormat } from './history-normalize.mjs';
+import {
+  normalizeResponsesBody,
+  isValidReasoningFormat,
+  isValidToolOutputFormat,
+} from './history-normalize.mjs';
+import { createHistoryMonitor } from './history-monitor.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_FILE = path.join(__dirname, 'proxy-config.json');
@@ -83,6 +88,12 @@ export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT
     if (!route.reasoning_format || !isValidReasoningFormat(route.reasoning_format)) {
       throw new Error(`路由 ${slug} 缺少或无效的 reasoning_format`);
     }
+    if (
+      route.tool_output_format !== undefined &&
+      !isValidToolOutputFormat(route.tool_output_format)
+    ) {
+      throw new Error(`路由 ${slug} 的 tool_output_format 无效`);
+    }
   }
   if (
     config.compact_fallback_model !== undefined &&
@@ -144,6 +155,7 @@ export function createProxyServer({
   logger = console,
   env = process.env,
   directModels: configuredDirectModels,
+  historyMonitor: configuredHistoryMonitor,
 }) {
   const routes = config.models || {};
   const catalogModels = Array.isArray(config.catalog?.models) ? config.catalog.models : null;
@@ -155,6 +167,7 @@ export function createProxyServer({
   const directModels = configuredDirectModels || parseDirectModels(env.DIRECT_MODELS, routes);
   const proxyUrlForModel = (slug) => resolveProxyUrl(proxyUrl, directModels, slug);
   const requireToken = accessToken.length > 0;
+  const historyMonitor = configuredHistoryMonitor || createHistoryMonitor({ env, logger });
 
   function isAuthorized(req) {
     if (!requireToken) return true;
@@ -208,7 +221,18 @@ export function createProxyServer({
           });
           return;
         }
-        forwardToUpstream(req, res, body, model, route, secrets, logger, proxyUrlForModel(model), env);
+        forwardToUpstream(
+          req,
+          res,
+          body,
+          model,
+          route,
+          secrets,
+          logger,
+          proxyUrlForModel(model),
+          env,
+          historyMonitor,
+        );
       });
       return;
     }
@@ -243,6 +267,7 @@ export function createProxyServer({
           proxyUrl,
           proxyUrlForModel,
           env,
+          historyMonitor,
         });
       });
       return;
@@ -440,12 +465,79 @@ function createProxyAgent(proxyUrl) {
   return agent;
 }
 
-function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUrl, env) {
+function forwardToUpstream(
+  req,
+  res,
+  body,
+  slug,
+  route,
+  secrets,
+  logger,
+  proxyUrl,
+  env,
+  historyMonitor,
+) {
+  const networkMode = proxyUrl ? 'proxy' : 'direct';
+  const monitorRequestId = historyMonitor.startRequest({
+    endpoint: '/v1/responses',
+    model: slug,
+    route,
+    network: networkMode,
+    body,
+  });
+  const normalization = normalizeResponsesBody(
+    body,
+    route.reasoning_format || 'passthrough',
+    route.tool_output_format || 'passthrough',
+  );
+  const {
+    body: normalizedBody,
+    removedReasoningIndexes,
+    removedWebSearchIndexes,
+    normalizedReasoningIndexes,
+    normalizedToolOutputIndexes,
+    reasoningChanges,
+    toolOutputChanges,
+  } = normalization;
+  historyMonitor.recordNormalized({
+    requestId: monitorRequestId,
+    endpoint: '/v1/responses',
+    model: slug,
+    upstreamModel: route.upstream_model,
+    network: networkMode,
+    attempt: 1,
+    body: normalizedBody,
+    actions: {
+      removed_reasoning_indexes: removedReasoningIndexes,
+      removed_web_search_indexes: removedWebSearchIndexes,
+      normalized_reasoning_indexes: normalizedReasoningIndexes,
+      normalized_tool_output_indexes: normalizedToolOutputIndexes,
+      reasoning_changes: reasoningChanges,
+      tool_output_changes: toolOutputChanges,
+    },
+  });
+  let monitorResultRecorded = false;
+  const recordMonitorResult = ({ status, upstreamHost = '', error = null }) => {
+    if (monitorResultRecorded) return;
+    monitorResultRecorded = true;
+    historyMonitor.recordResult({
+      requestId: monitorRequestId,
+      endpoint: '/v1/responses',
+      model: slug,
+      upstreamModel: route.upstream_model,
+      network: networkMode,
+      attempt: 1,
+      status,
+      upstreamHost,
+      error,
+    });
+  };
   const authMode = route.auth_mode || 'api_key';
   let upstreamAuthorization;
   if (authMode === 'openai_passthrough') {
     upstreamAuthorization = getHeader(req, 'authorization');
     if (!upstreamAuthorization) {
+      recordMonitorResult({ status: 401, error: new Error('缺少 ChatGPT 登录认证') });
       sendJson(res, 401, {
         error: { type: 'authentication_error', message: '缺少 ChatGPT 登录认证' },
       });
@@ -454,6 +546,10 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
   } else {
     const apiKey = env[route.api_key_env] || secrets[route.api_key_env];
     if (!apiKey) {
+      recordMonitorResult({
+        status: 500,
+        error: new Error(`缺少上游密钥：${route.api_key_env}`),
+      });
       sendJson(res, 500, {
         error: { type: 'server_error', message: `缺少上游密钥：${route.api_key_env}` },
       });
@@ -466,30 +562,25 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
   try {
     upstreamUrl = new URL(endpoint);
   } catch (err) {
+    recordMonitorResult({ status: 500, error: new Error(`上游地址无效：${endpoint}`) });
     sendJson(res, 500, { error: { type: 'server_error', message: `上游地址无效：${endpoint}` } });
     return;
   }
   const lib = upstreamUrl.protocol === 'https:' ? https : http;
   const agent = upstreamUrl.protocol === 'https:' && proxyUrl ? createProxyAgent(proxyUrl) : undefined;
-  const networkMode = proxyUrl ? 'proxy' : 'direct';
-  const {
-    body: normalizedBody,
-    removedReasoningIndexes,
-    removedWebSearchIndexes,
-  } = normalizeResponsesBody(
-    body,
-    route.reasoning_format || 'passthrough',
-  );
   const removedParts = [];
-  if (removedReasoningIndexes.length > 0) {
-    removedParts.push(`reasoning ${removedReasoningIndexes.length} 项`);
+  if (normalizedReasoningIndexes.length > 0) {
+    removedParts.push(`reasoning ${normalizedReasoningIndexes.length} 项冲突字段已清空`);
+  }
+  if (normalizedToolOutputIndexes.length > 0) {
+    removedParts.push(`工具输出 ${normalizedToolOutputIndexes.length} 项已转为 JSON 文本`);
   }
   if (removedWebSearchIndexes.length > 0) {
-    removedParts.push(`web_search_call ${removedWebSearchIndexes.length} 项`);
+    removedParts.push(`移除 web_search_call ${removedWebSearchIndexes.length} 项`);
   }
   if (removedParts.length > 0) {
     logger.info(
-      `[codex-proxy] POST /v1/responses model=${slug} 历史整理：移除 ${removedParts.join('、')}`,
+      `[codex-proxy] POST /v1/responses model=${slug} 历史整理：${removedParts.join('、')}`,
     );
   }
   const upstreamBody = JSON.stringify({ ...normalizedBody, model: route.upstream_model });
@@ -519,6 +610,11 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
   if (agent) requestOptions.agent = agent;
   const outgoing = lib.request(upstreamUrl, requestOptions, (upRes) => {
     const status = upRes.statusCode || 502;
+    recordMonitorResult({
+      status,
+      upstreamHost: upstreamUrl.host,
+      error: status >= 400 ? new Error(`HTTP ${status}`) : null,
+    });
     const outHeaders = {};
     for (const [key, value] of Object.entries(upRes.headers)) {
       if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) outHeaders[key] = value;
@@ -548,6 +644,7 @@ function forwardToUpstream(req, res, body, slug, route, secrets, logger, proxyUr
     outgoing.destroy(new Error('上游响应超时'));
   });
   outgoing.on('error', (err) => {
+    recordMonitorResult({ status: 502, upstreamHost: upstreamUrl.host, error: err });
     if (!res.headersSent) {
       sendJson(res, 502, {
         error: { type: 'upstream_error', message: `上游请求失败：${err.message}` },

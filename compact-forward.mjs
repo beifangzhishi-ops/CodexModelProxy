@@ -31,10 +31,21 @@ export async function forwardCompactWithFallback({
   proxyUrl,
   proxyUrlForModel,
   env,
+  historyMonitor,
 }) {
   const selectProxyUrl = proxyUrlForModel || (() => proxyUrl || '');
+  const firstProxyUrl = selectProxyUrl(slug);
+  const monitorRequestId = historyMonitor?.startRequest({
+    endpoint: '/v1/responses/compact',
+    model: slug,
+    route,
+    network: firstProxyUrl ? 'proxy' : 'direct',
+    body,
+  });
   let activeRequest;
   let clientClosed = false;
+  let attemptNumber = 0;
+  const recordedMonitorAttempts = new Set();
   const onClientClose = () => {
     clientClosed = true;
     activeRequest?.destroy();
@@ -42,25 +53,52 @@ export async function forwardCompactWithFallback({
   res.once('close', onClientClose);
 
   const attempt = async (attemptSlug, attemptRoute) => {
+    const currentAttempt = ++attemptNumber;
     const attemptProxyUrl = selectProxyUrl(attemptSlug);
+    const normalization = normalizeResponsesBody(
+      body,
+      attemptRoute.reasoning_format || 'passthrough',
+      attemptRoute.tool_output_format || 'passthrough',
+    );
     const {
       body: normalizedBody,
       removedReasoningIndexes,
       removedWebSearchIndexes,
-    } = normalizeResponsesBody(
-      body,
-      attemptRoute.reasoning_format || 'passthrough',
-    );
+      normalizedReasoningIndexes,
+      normalizedToolOutputIndexes,
+      reasoningChanges,
+      toolOutputChanges,
+    } = normalization;
+    historyMonitor?.recordNormalized({
+      requestId: monitorRequestId,
+      endpoint: '/v1/responses/compact',
+      model: attemptSlug,
+      upstreamModel: attemptRoute.upstream_model,
+      network: attemptProxyUrl ? 'proxy' : 'direct',
+      attempt: currentAttempt,
+      body: normalizedBody,
+      actions: {
+        removed_reasoning_indexes: removedReasoningIndexes,
+        removed_web_search_indexes: removedWebSearchIndexes,
+        normalized_reasoning_indexes: normalizedReasoningIndexes,
+        normalized_tool_output_indexes: normalizedToolOutputIndexes,
+        reasoning_changes: reasoningChanges,
+        tool_output_changes: toolOutputChanges,
+      },
+    });
     const removedParts = [];
-    if (removedReasoningIndexes.length > 0) {
-      removedParts.push(`reasoning ${removedReasoningIndexes.length} 项`);
+    if (normalizedReasoningIndexes.length > 0) {
+      removedParts.push(`reasoning ${normalizedReasoningIndexes.length} 项冲突字段已清空`);
+    }
+    if (normalizedToolOutputIndexes.length > 0) {
+      removedParts.push(`工具输出 ${normalizedToolOutputIndexes.length} 项已转为 JSON 文本`);
     }
     if (removedWebSearchIndexes.length > 0) {
-      removedParts.push(`web_search_call ${removedWebSearchIndexes.length} 项`);
+      removedParts.push(`移除 web_search_call ${removedWebSearchIndexes.length} 项`);
     }
     if (removedParts.length > 0) {
       logger.info(
-        `[codex-proxy] POST /v1/responses/compact model=${attemptSlug} 历史整理：移除 ${removedParts.join('、')}`,
+        `[codex-proxy] POST /v1/responses/compact model=${attemptSlug} 历史整理：${removedParts.join('、')}`,
       );
     }
     const result = await requestBufferedCompact({
@@ -76,6 +114,20 @@ export async function forwardCompactWithFallback({
       },
     });
     activeRequest = undefined;
+    if (!recordedMonitorAttempts.has(currentAttempt)) {
+      recordedMonitorAttempts.add(currentAttempt);
+      historyMonitor?.recordResult({
+        requestId: monitorRequestId,
+        endpoint: '/v1/responses/compact',
+        model: attemptSlug,
+        upstreamModel: attemptRoute.upstream_model,
+        network: attemptProxyUrl ? 'proxy' : 'direct',
+        attempt: currentAttempt,
+        status: result.status ?? (result.error ? 502 : null),
+        upstreamHost: result.upstreamHost || '',
+        error: result.error || (result.status >= 400 ? new Error(`HTTP ${result.status}`) : null),
+      });
+    }
     return { ...result, proxyUrl: attemptProxyUrl };
   };
 
@@ -100,6 +152,20 @@ export async function forwardCompactWithFallback({
     }
     sendBufferedResponse(res, result);
   } catch (err) {
+    if (monitorRequestId && !recordedMonitorAttempts.has(attemptNumber || 1)) {
+      recordedMonitorAttempts.add(attemptNumber || 1);
+      historyMonitor?.recordResult({
+        requestId: monitorRequestId,
+        endpoint: '/v1/responses/compact',
+        model: attemptNumber > 1 ? fallbackSlug : slug,
+        upstreamModel: attemptNumber > 1 ? fallbackRoute?.upstream_model : route.upstream_model,
+        network: (attemptNumber > 1 ? selectProxyUrl(fallbackSlug) : firstProxyUrl) ? 'proxy' : 'direct',
+        attempt: attemptNumber || 1,
+        status: 502,
+        upstreamHost: '',
+        error: err,
+      });
+    }
     if (!clientClosed && !res.headersSent) {
       sendJson(res, 502, {
         error: { type: 'upstream_error', message: `上游压缩请求失败：${err.message}` },

@@ -1,7 +1,11 @@
 // 历史整理单元测试：直接验证按目标 reasoning 格式过滤的行为。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeResponsesBody, REASONING_FORMATS } from '../history-normalize.mjs';
+import {
+  normalizeResponsesBody,
+  REASONING_FORMATS,
+  TOOL_OUTPUT_FORMATS,
+} from '../history-normalize.mjs';
 
 const GPT = REASONING_FORMATS.OPENAI_ENCRYPTED;
 const DS = REASONING_FORMATS.DEEPSEEK_PLAINTEXT;
@@ -38,22 +42,39 @@ const gptWebSearch = {
   status: 'completed',
 };
 
-test('GPT 目标只保留带有效 encrypted_content 的 reasoning', () => {
+test('GPT 目标保留 reasoning 项，仅清空冲突的明文 content', () => {
+  const body = { input: [dsReasoning, gptReasoning, userMessage] };
   const result = normalizeResponsesBody(
-    { input: [dsReasoning, gptReasoning, userMessage] },
+    body,
     GPT,
   );
-  assert.deepEqual(result.body.input, [gptReasoning, userMessage]);
-  assert.deepEqual(result.removedReasoningIndexes, [0]);
+  assert.deepEqual(result.body.input, [
+    { ...dsReasoning, content: [] },
+    gptReasoning,
+    userMessage,
+  ]);
+  assert.deepEqual(result.removedReasoningIndexes, []);
+  assert.deepEqual(result.normalizedReasoningIndexes, [0]);
+  assert.deepEqual(result.reasoningChanges, [{ index: 0, fields: ['content'] }]);
+  assert.deepEqual(body.input, [dsReasoning, gptReasoning, userMessage]);
+  assert.notEqual(result.body, body);
+  assert.notEqual(result.body.input[0], dsReasoning);
+  assert.equal(result.body.input[1], gptReasoning);
 });
 
-test('DS 目标只保留非空明文 content 的 reasoning', () => {
+test('DS 目标保留 reasoning 项，仅清空冲突的 encrypted_content', () => {
   const result = normalizeResponsesBody(
     { input: [gptReasoning, dsReasoning, userMessage] },
     DS,
   );
-  assert.deepEqual(result.body.input, [dsReasoning, userMessage]);
-  assert.deepEqual(result.removedReasoningIndexes, [0]);
+  assert.deepEqual(result.body.input, [
+    { ...gptReasoning, encrypted_content: null },
+    dsReasoning,
+    userMessage,
+  ]);
+  assert.deepEqual(result.removedReasoningIndexes, []);
+  assert.deepEqual(result.normalizedReasoningIndexes, [0]);
+  assert.deepEqual(result.reasoningChanges, [{ index: 0, fields: ['encrypted_content'] }]);
 });
 
 test('passthrough 目标保留所有 reasoning', () => {
@@ -65,7 +86,7 @@ test('passthrough 目标保留所有 reasoning', () => {
   assert.deepEqual(result.removedReasoningIndexes, []);
 });
 
-test('畸形与不完整 reasoning 对 GPT 和 DS 均被移除', () => {
+test('畸形与不完整 reasoning 对 GPT 和 DS 均保留并按字段清空', () => {
   const malformed = [
     { type: 'reasoning' },
     { type: 'reasoning', content: [] },
@@ -79,12 +100,32 @@ test('畸形与不完整 reasoning 对 GPT 和 DS 均被移除', () => {
     userMessage,
   ];
   const gptResult = normalizeResponsesBody({ input: malformed }, GPT);
-  assert.deepEqual(gptResult.body.input, [userMessage]);
-  assert.deepEqual(gptResult.removedReasoningIndexes, [0, 1, 2, 3, 4]);
+  assert.deepEqual(gptResult.body.input, [
+    { type: 'reasoning' },
+    { type: 'reasoning', content: [] },
+    { type: 'reasoning', encrypted_content: '' },
+    { type: 'reasoning', content: [], encrypted_content: 'opaque' },
+    { type: 'reasoning', content: [], encrypted_content: 'opaque' },
+    userMessage,
+  ]);
+  assert.deepEqual(gptResult.removedReasoningIndexes, []);
+  assert.deepEqual(gptResult.normalizedReasoningIndexes, [3, 4]);
 
   const dsResult = normalizeResponsesBody({ input: malformed }, DS);
-  assert.deepEqual(dsResult.body.input, [userMessage]);
-  assert.deepEqual(dsResult.removedReasoningIndexes, [0, 1, 2, 3, 4]);
+  assert.deepEqual(dsResult.body.input, [
+    { type: 'reasoning' },
+    { type: 'reasoning', content: [] },
+    { type: 'reasoning', encrypted_content: null },
+    { type: 'reasoning', content: 'not-an-array', encrypted_content: null },
+    {
+      type: 'reasoning',
+      content: [{ type: 'reasoning_text', text: 'both' }],
+      encrypted_content: null,
+    },
+    userMessage,
+  ]);
+  assert.deepEqual(dsResult.removedReasoningIndexes, []);
+  assert.deepEqual(dsResult.normalizedReasoningIndexes, [2, 3, 4]);
 });
 
 test('普通消息、工具调用、搜索与压缩项保持不变', () => {
@@ -103,9 +144,63 @@ test('普通消息、工具调用、搜索与压缩项保持不变', () => {
     { type: 'item_reference', id: 'item_1' },
   ];
   const gptResult = normalizeResponsesBody({ input: [dsReasoning, ...preserved] }, GPT);
-  assert.deepEqual(gptResult.body.input, preserved);
+  assert.deepEqual(gptResult.body.input, [{ ...dsReasoning, content: [] }, ...preserved]);
   const dsResult = normalizeResponsesBody({ input: [gptReasoning, ...preserved] }, DS);
-  assert.deepEqual(dsResult.body.input, preserved);
+  assert.deepEqual(dsResult.body.input, [{ ...gptReasoning, encrypted_content: null }, ...preserved]);
+});
+
+test('json_string 将两个工具输出类型完整序列化，字符串保持不变', () => {
+  const imageOutput = [
+    {
+      type: 'image',
+      image_url: 'data:image/png;base64,fixture-image-data',
+      detail: 'original',
+    },
+  ];
+  const objectOutput = {
+    width: 320,
+    height: 240,
+    pixels: [{ r: 1, g: 2, b: 3 }],
+  };
+  const input = [
+    { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'view_image', arguments: '{}' },
+    { type: 'function_call_output', call_id: 'call_1', output: imageOutput },
+    { type: 'custom_tool_call_output', call_id: 'call_2', output: objectOutput },
+    { type: 'function_call_output', call_id: 'call_3', output: 42 },
+    { type: 'custom_tool_call_output', call_id: 'call_4', output: null },
+    { type: 'function_call_output', call_id: 'call_5', output: 'already-text' },
+  ];
+  const body = { input };
+  const result = normalizeResponsesBody(body, DS, TOOL_OUTPUT_FORMATS.JSON_STRING);
+
+  assert.equal(result.body.input[0], input[0]);
+  assert.equal(result.body.input[1].call_id, 'call_1');
+  assert.deepEqual(JSON.parse(result.body.input[1].output), imageOutput);
+  assert.deepEqual(JSON.parse(result.body.input[2].output), objectOutput);
+  assert.equal(result.body.input[3].output, '42');
+  assert.equal(result.body.input[4].output, 'null');
+  assert.equal(result.body.input[5], input[5]);
+  assert.deepEqual(result.normalizedToolOutputIndexes, [1, 2, 3, 4]);
+  assert.deepEqual(result.toolOutputChanges, [
+    { index: 1, type: 'function_call_output', from: 'array', to: 'string', bytes: Buffer.byteLength(JSON.stringify(imageOutput)) },
+    { index: 2, type: 'custom_tool_call_output', from: 'object', to: 'string', bytes: Buffer.byteLength(JSON.stringify(objectOutput)) },
+    { index: 3, type: 'function_call_output', from: 'number', to: 'string', bytes: 2 },
+    { index: 4, type: 'custom_tool_call_output', from: 'null', to: 'string', bytes: 4 },
+  ]);
+  assert.equal(result.body.input[1].output.includes('fixture-image-data'), true);
+  assert.deepEqual(body.input, input);
+  assert.notEqual(result.body, body);
+});
+
+test('passthrough 工具输出和没有变化的请求保持原引用', () => {
+  const output = [{ type: 'image', data: 'base64-fixture' }];
+  const body = {
+    input: [{ type: 'function_call_output', call_id: 'call_1', output }],
+  };
+  const result = normalizeResponsesBody(body, PASSTHROUGH, TOOL_OUTPUT_FORMATS.PASSTHROUGH);
+  assert.equal(result.body, body);
+  assert.equal(result.body.input[0].output, output);
+  assert.deepEqual(result.normalizedToolOutputIndexes, []);
 });
 
 test('字符串 input 与不含 reasoning 的 input 保持原引用', () => {
@@ -159,12 +254,17 @@ test('DS 与 passthrough 目标保留全部 web_search_call', () => {
   assert.deepEqual(passResult.removedWebSearchIndexes, []);
 });
 
-test('OpenRouter 删除加密 reasoning 与 web_search_call，保留普通历史', () => {
+test('OpenRouter 清空 encrypted_content、移除 web_search_call，保留普通历史', () => {
   const body = {
     input: [gptReasoning, dsReasoning, dsWebSearch, gptWebSearch, userMessage],
   };
   const result = normalizeResponsesBody(body, OPENROUTER);
-  assert.deepEqual(result.body.input, [dsReasoning, userMessage]);
-  assert.deepEqual(result.removedReasoningIndexes, [0]);
+  assert.deepEqual(result.body.input, [
+    { ...gptReasoning, encrypted_content: null },
+    dsReasoning,
+    userMessage,
+  ]);
+  assert.deepEqual(result.removedReasoningIndexes, []);
+  assert.deepEqual(result.normalizedReasoningIndexes, [0]);
   assert.deepEqual(result.removedWebSearchIndexes, [2, 3]);
 });

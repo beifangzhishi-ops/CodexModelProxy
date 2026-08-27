@@ -1,6 +1,6 @@
 # CodexModelProxy 八模型纯 Responses 中转（Windows）
 
-本目录是一个零依赖的 Node.js 本地中转服务，让 Codex 通过一个本地地址同时使用 8 个上游模型（ChatGPT × 3、OpenCode × 2、DeepSeek × 2、OpenRouter × 1）。所有上游统一走 `/responses` 协议；代理替换模型名、处理鉴权，并在发送前按目标模型整理 reasoning 与网页搜索历史，其余请求与响应原样转发，不做工具协议转换。
+本目录是一个零依赖的 Node.js 本地中转服务，让 Codex 通过一个本地地址同时使用 8 个上游模型（ChatGPT × 3、OpenCode × 2、DeepSeek × 2、OpenRouter × 1）。所有上游统一走 `/responses` 协议；代理替换模型名、处理鉴权，并在发送前按目标模型整理 reasoning、网页搜索历史和指定的工具输出格式，其余请求与响应原样转发。
 
 项目只面向 Windows 本机使用，通过 Git 仓库在多个机器间同步更新：通用配置提交到仓库，密钥与本机差异（代理地址、端口、访问令牌）放在各自机器上、不提交。
 
@@ -25,15 +25,17 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 
 - 只处理 `POST /v1/responses`、`POST /v1/responses/compact` 与 `GET /v1/models`；所有路由固定追加 `/responses`。
 - 请求体除 `model` 替换为实际上游模型名外，还会按目标模型的 reasoning 格式整理推理历史；JSON 与 SSE 响应状态、响应头和正文原样返回。
-- 跨 GPT/DeepSeek 切换时自动移除不兼容的推理项：GPT 路由只保留带 `encrypted_content` 的 OpenAI 推理状态，OpenCode/DeepSeek 路由只保留带明文 `content` 的推理项；整理只影响本次上游请求，不修改 Codex 原会话。
+- 跨 GPT/DeepSeek 切换时保留所有 reasoning 项和项目顺序，只清空冲突字段：GPT 路由把非空或格式不兼容的 `content` 改为 `[]`，保留 `encrypted_content`；OpenCode、直连 DeepSeek 与 OpenRouter 路由把已有的 `encrypted_content` 改为 `null`，保留明文 `content`。整理只影响本次上游请求，不修改 Codex 原会话，也不尝试恢复或伪造密文。
 - 跨模型切换时同步整理网页搜索记录：GPT 路由只保留 `id` 以 `ws` 开头的 `web_search_call`，DS/Codex 风格的 `call_...` 搜索调用项从本次上游请求移除；助手消息中的搜索结论与引用不受影响。
-- OpenRouter 路由移除全部带 `encrypted_content` 的 reasoning，以及 OpenRouter 不接受的 `web_search_call`；普通消息、函数调用和工具结果不改名、不转换。
-- 不解析或转换工具调用、SSE 事件；推理与搜索历史只按上述规则过滤，不尝试恢复跨供应商私有状态。
+- OpenRouter 路由清空 reasoning 的 `encrypted_content`，并移除 OpenRouter 不接受的 `web_search_call`；普通消息、函数调用和工具结果不改名。
+- 每条路由可设置 `tool_output_format`：默认 `passthrough`；四条 OC/直连 DeepSeek 路由使用 `json_string`，将 `function_call_output` 与 `custom_tool_call_output` 中的非字符串 `output` 完整 `JSON.stringify` 为文本，字符串保持不变。GPT 与 Ox 使用 `passthrough`，数组中的图片、`call_id`、项目顺序均保留。
+- 不解析或转换 SSE 事件；工具输出只按上述路由规则处理，不尝试恢复跨供应商私有状态。
 - 三个 GPT 路由把 Codex 的 ChatGPT 登录认证（`Authorization`）原样转发至 Backend API。
 - OC 与直连 DeepSeek 路由丢弃传入的 ChatGPT `Authorization`，分别注入 `OPENCODE_API_KEY` 与 `DEEPSEEK_API_KEY`。
 - 未知模型、缺少登录认证、缺少上游密钥时不访问上游，直接返回错误。
 - 日志只记录模型与上游主机，不记录提示词、响应正文、请求头与 API 密钥。
 - 上游返回 4xx/5xx 时，代理额外写一条脱敏诊断日志：提取错误 `message`/`code`/provider 原始消息，统计请求输入类型、工具类型和孤立调用数；不记录提示词、工具参数或密钥。
+- 历史监控默认关闭；设置 `HISTORY_MONITOR=1` 后，按请求关联 ID 记录清洗前结构、清洗后结构和上游结果三类 JSONL 事件。监控只记录项目索引、类型、ID、字段存在性/长度、工具输出类型/字节数、调用配对统计和处理动作，不记录消息正文、reasoning 正文、密文、工具参数、工具输出、Base64、请求头或密钥。
 
 ## 图片上传
 
@@ -44,7 +46,7 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 1. 安装 Node.js（本项目只用内置模块，无需安装任何依赖）。
 2. 把仓库克隆到本机任意目录。
 3. 复制 `proxy-secrets.env.example` 为 `proxy-secrets.env`，填写 `OPENCODE_API_KEY`、`DEEPSEEK_API_KEY` 与 `OPENROUTER_API_KEY`。该文件已被 Git 忽略，不会提交，各机器填各自的密钥。
-4. 复制 `proxy-local.env.example` 为 `proxy-local.env`，按本机代理端口修改 `PROXY_URL`；需要绕过代理的模型写入 `DIRECT_MODELS`，未列入白名单的模型默认走 `PROXY_URL`。启用本地访问令牌时在此文件加 `PROXY_ACCESS_TOKEN=...`。
+4. 复制 `proxy-local.env.example` 为 `proxy-local.env`，按本机代理端口修改 `PROXY_URL`；需要绕过代理的模型写入 `DIRECT_MODELS`，未列入白名单的模型默认走 `PROXY_URL`。启用本地访问令牌时在此文件加 `PROXY_ACCESS_TOKEN=...`；排查历史兼容问题时可临时加 `HISTORY_MONITOR=1`。
 5. 双击或运行 `start-proxy.cmd` 启动中转。浏览器打开 `http://127.0.0.1:8787/healthz`，应返回 `{"status":"ok"}`。
 6. 按下方“Codex 配置”准备三处文件并运行切换脚本。
 7. 重新加载 Codex 配置与模型目录（模型目录缓存到 App Server 重启后刷新）。
@@ -65,7 +67,7 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 统一配置涉及三处文件：仓库内的 `proxy-secrets.env` 与 `proxy-local.env` 保存本机差异，`C:\Users\noha\.codex\config_unified.toml` 是 Codex 的备用统一配置模板。
 
 1. `proxy-secrets.env`：填写 `OPENCODE_API_KEY`、`DEEPSEEK_API_KEY` 与 `OPENROUTER_API_KEY`，两个 OC 路由、两个直连 DeepSeek 路由和 Ox Alpha 路由分别使用它们。
-2. `proxy-local.env`：设置本机 `PROXY_URL`、`DIRECT_MODELS`、`HOST`、`PORT`；启用本地访问令牌时加 `PROXY_ACCESS_TOKEN=...`，其值必须与下方 `http_headers` 中的一致。
+2. `proxy-local.env`：设置本机 `PROXY_URL`、`DIRECT_MODELS`、`HOST`、`PORT`；启用本地访问令牌时加 `PROXY_ACCESS_TOKEN=...`，其值必须与下方 `http_headers` 中的一致；历史排查开关见下方“可选历史监控”。
 3. `config_unified.toml`（位于 `%USERPROFILE%\.codex`）：
 
 ```toml
@@ -126,13 +128,14 @@ codex exec -m ox-alpha "提示词"
 |---|---|
 | `server.mjs` | 中转服务主程序，零依赖 |
 | `compact-forward.mjs` | `/responses/compact` 转发与失败后备模型重试 |
-| `proxy-config.json` | 通用配置：监听地址、端口、压缩后备模型与 8 条模型路由；每条路由声明 `reasoning_format`（提交到仓库） |
-| `history-normalize.mjs` | 按目标模型整理 reasoning 与 `web_search_call` 历史（发送前过滤，不修改原会话） |
+| `proxy-config.json` | 通用配置：监听地址、端口、压缩后备模型与 8 条模型路由；每条路由声明 `reasoning_format` 与 `tool_output_format`（提交到仓库） |
+| `history-normalize.mjs` | 按目标模型整理 reasoning、`web_search_call` 与工具输出历史（发送前处理，不修改原会话） |
+| `history-monitor.mjs` | 可选的脱敏历史结构监控、关联 ID、调用配对统计和日志轮换 |
 | `proxy-secrets.env.example` | 密钥模板；复制为 `proxy-secrets.env` 填写，后者不提交 |
 | `proxy-local.env.example` | 本机差异模板；复制为 `proxy-local.env` 填写，后者不提交 |
 | `models_unified.json` | Codex 统一模型目录（8 个模型） |
 | `config-templates/` | Codex 配置切换脚本示例（脱敏模板，复制到 `%USERPROFILE%\.codex` 后按本机修改） |
-| `test/proxy.test.mjs`、`test/compact-fallback.test.mjs`、`test/history-normalize.test.mjs` | 自动测试（内存 mock 上游，不消耗真实额度） |
+| `test/proxy.test.mjs`、`test/compact-fallback.test.mjs`、`test/history-normalize.test.mjs`、`test/history-monitor.test.mjs` | 自动测试（临时目录与内存 mock 上游，不消耗真实额度） |
 
 ## 上游网络路径
 
@@ -147,19 +150,32 @@ DIRECT_MODELS=deepseek-v4-flash,deepseek-v4-pro,deepseek-v4-flash-direct,deepsee
 
 不需要任何上游代理时把 `PROXY_URL` 留空或删除该行。服务端也支持直接用进程环境变量 `PROXY_URL` / `DIRECT_MODELS` / `HOST` / `PORT` / `PROXY_ACCESS_TOKEN` 覆盖。
 
+## 可选历史监控
+
+监控默认关闭，不影响正常转发。需要排查偶发的历史兼容问题时，在启动中转的同一环境中设置：
+
+```text
+HISTORY_MONITOR=1
+HISTORY_MONITOR_FILE=history-monitor.jsonl
+```
+
+`HISTORY_MONITOR_FILE` 可以是绝对路径或相对路径；相对路径默认位于项目目录。日志达到 10 MB 后轮换为同目录下的 `history-monitor.jsonl.1`，只保留一个备份。也可以用 `HISTORY_MONITOR_MAX_BYTES` 临时调整轮换阈值。写日志失败只产生警告，不会阻断上游请求。
+
+监控完成后删除 `HISTORY_MONITOR` 或改为 `0`，再手动重启中转关闭它。日志文件已加入 Git 忽略，不会提交。
+
 ## 测试
 
 ```text
-node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fallback.test.mjs
+node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fallback.test.mjs test\history-monitor.test.mjs
 ```
 
-测试覆盖健康检查、模型列表、8 条路由、模型名与密钥隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、未知模型拦截，以及 GPT/DeepSeek 双向和 OpenRouter reasoning 历史整理、`web_search_call` 过滤与畸形推理项处理。
+测试覆盖健康检查、模型列表、8 条路由、模型名与密钥隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、未知模型拦截，GPT/DeepSeek/OpenRouter reasoning 字段清空、`web_search_call` 过滤、畸形推理项保留、四条 DS 路由工具输出 JSON 文本化、图片数组与调用配对保留，以及历史监控开关、脱敏摘要、关联 ID 和日志轮换。
 
 ## 已知限制
 
-- OpenCode GO 的 `/responses` 兼容层返回字段较精简，标准多轮工具调用历史可能不被完整接受；代理只原样返回上游错误，不做转换或缓存。
+- OpenCode GO 的 `/responses` 兼容层返回字段较精简，标准多轮工具调用历史仍可能不被完整接受；四条 OC/直连 DeepSeek 路由只把非字符串工具输出序列化为 JSON 文本，不做其他工具协议转换或缓存。
 - OpenRouter 上的 Ox Alpha 是匿名预览模型，免费资格、可用性和上游策略可能变化；当前使用 `stealth/ox-alpha`，并通过 `OPENROUTER_API_KEY` 认证。
-- Ox Alpha 路由使用 `reasoning_format: openrouter_compatible`：跨供应商切换时删除带 `encrypted_content` 的 reasoning 和 `web_search_call`，不尝试恢复原供应商的私有思考状态。
+- Ox Alpha 路由使用 `reasoning_format: openrouter_compatible`：跨供应商切换时把 `encrypted_content` 置为 `null`，并删除 `web_search_call`，不尝试恢复原供应商的私有思考状态。
 - OpenRouter/Stealth 上游不接受 Codex 的 freeform custom 工具（`apply_patch`），因此 Ox Alpha 目录中 `apply_patch_tool_type` 置为 `null`，该模型改用 `exec_command` 完成文件操作；不把 custom 转成 function，以免客户端执行路径与上游协议错位。
 - DeepSeek 直连的 `/responses` 兼容性取决于上游实现；代理不降级到 Chat Completions。
 - 历史整理只解决已知的 GPT/DeepSeek/OpenRouter 历史格式兼容，不解决真正的上下文 token 超限；净化后若上游仍返回上下文长度错误，需要压缩或裁剪会话。
@@ -174,6 +190,7 @@ node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fal
 - OpenCode 返回 403 区域限制：如果希望 OpenCode 走代理，请从 `DIRECT_MODELS` 删除对应的 OC 模型 slug，并确认 `PROXY_URL` 已配置且本机代理正在运行。
 - 模型列表不对：确认 `model_catalog_json` 指向本机克隆目录的 `models_unified.json`，并重启 Codex App Server。
 - GPT 模型返回 401：确认 Codex 已完成 ChatGPT 登录，且 `forced_login_method = "chatgpt"`、`requires_openai_auth = true`。
+- 需要排查偶发历史错误：临时设置 `HISTORY_MONITOR=1` 并重启中转，再复现一次；检查 `history-monitor.jsonl` 中同一 `request_id` 的三类结构事件。排查完成后关闭开关并手动重启中转。
 
 ## 安全说明
 

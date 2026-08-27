@@ -3,4 +3,6 @@ proxy-local.env
 proxy.pid
 proxy.log
 proxy.err.log
+history-monitor.jsonl
+history-monitor.jsonl.1
 node_modules/

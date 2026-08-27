@@ -45,6 +45,7 @@ function startProxy(upstreamBaseUrl, { env = {}, logger = silentLogger } = {}) {
         upstream_model: 'default-upstream',
         auth_mode: 'openai_passthrough',
         reasoning_format: 'openai_encrypted',
+        tool_output_format: 'passthrough',
       },
       'flash-model': {
         upstream_base_url: upstreamBaseUrl,
@@ -52,6 +53,7 @@ function startProxy(upstreamBaseUrl, { env = {}, logger = silentLogger } = {}) {
         auth_mode: 'api_key',
         api_key_env: 'FLASH_API_KEY',
         reasoning_format: 'deepseek_plaintext',
+        tool_output_format: 'json_string',
       },
     },
   };
@@ -197,22 +199,43 @@ test('压缩首次请求按 GPT 格式整理，后备请求从原始历史按 DS
     id: 'ws_test',
     status: 'completed',
   };
+  const imageOutput = [{
+    type: 'image',
+    image_url: 'data:image/png;base64,compact-fixture',
+    detail: 'original',
+  }];
+  const objectOutput = { width: 80, height: 60 };
   await withProxy({ failModels: new Set(['default-upstream']) }, async (upstream, proxy) => {
     const result = await postCompact(proxy.baseUrl, 'default-model', [
       dsReasoning,
       gptReasoning,
       dsWebSearch,
       gptWebSearch,
+      { type: 'function_call', id: 'fc_view', call_id: 'call_view', name: 'view_image', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_view', output: imageOutput },
+      { type: 'custom_tool_call_output', call_id: 'call_object', output: objectOutput },
       message,
     ]);
 
     assert.equal(result.status, 200);
     assert.equal(upstream.seen.length, 2);
-    assert.deepEqual(upstream.seen[0].body.input, [gptReasoning, gptWebSearch, message]);
+    assert.deepEqual(upstream.seen[0].body.input, [
+      { ...dsReasoning, content: [] },
+      gptReasoning,
+      gptWebSearch,
+      { type: 'function_call', id: 'fc_view', call_id: 'call_view', name: 'view_image', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_view', output: imageOutput },
+      { type: 'custom_tool_call_output', call_id: 'call_object', output: objectOutput },
+      message,
+    ]);
     assert.deepEqual(upstream.seen[1].body.input, [
       dsReasoning,
+      { ...gptReasoning, encrypted_content: null },
       dsWebSearch,
       gptWebSearch,
+      { type: 'function_call', id: 'fc_view', call_id: 'call_view', name: 'view_image', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_view', output: JSON.stringify(imageOutput) },
+      { type: 'custom_tool_call_output', call_id: 'call_object', output: JSON.stringify(objectOutput) },
       message,
     ]);
   });
