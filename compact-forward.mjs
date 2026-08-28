@@ -1,9 +1,8 @@
 // Responses 压缩请求转发：先用请求模型，失败后仅重试一次后备模型。
 import http from 'node:http';
 import https from 'node:https';
-import net from 'node:net';
-import tls from 'node:tls';
 import { normalizeResponsesBody } from './history-normalize.mjs';
+import { createProxyAgent } from './proxy-agent.mjs';
 
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 600000;
@@ -29,19 +28,17 @@ export async function forwardCompactWithFallback({
   secrets,
   logger,
   proxyUrl,
-  proxyUrlForModel,
+  proxyForModel,
   env,
   historyMonitor,
 }) {
-  const selectProxyUrl = proxyUrlForModel || (() => proxyUrl || '');
-  const firstProxyUrl = selectProxyUrl(slug);
-  const monitorRequestId = historyMonitor?.startRequest({
-    endpoint: '/v1/responses/compact',
-    model: slug,
-    route,
-    network: firstProxyUrl ? 'proxy' : 'direct',
-    body,
-  });
+  const selectProxy = proxyForModel || (async () => ({
+    url: proxyUrl || '',
+    mode: proxyUrl ? 'fixed-proxy' : 'direct',
+  }));
+  let firstProxy = { url: '', mode: 'direct' };
+  let monitorRequestId;
+  let lastNetworkMode = 'direct';
   let activeRequest;
   let clientClosed = false;
   let attemptNumber = 0;
@@ -52,9 +49,11 @@ export async function forwardCompactWithFallback({
   };
   res.once('close', onClientClose);
 
-  const attempt = async (attemptSlug, attemptRoute) => {
+  const attempt = async (attemptSlug, attemptRoute, selectedProxy) => {
     const currentAttempt = ++attemptNumber;
-    const attemptProxyUrl = selectProxyUrl(attemptSlug);
+    const attemptProxy = selectedProxy || await selectProxy(attemptSlug);
+    const attemptProxyUrl = attemptProxy.url;
+    lastNetworkMode = attemptProxy.mode;
     const normalization = normalizeResponsesBody(
       body,
       attemptRoute.reasoning_format || 'passthrough',
@@ -74,7 +73,7 @@ export async function forwardCompactWithFallback({
       endpoint: '/v1/responses/compact',
       model: attemptSlug,
       upstreamModel: attemptRoute.upstream_model,
-      network: attemptProxyUrl ? 'proxy' : 'direct',
+      network: attemptProxy.mode,
       attempt: currentAttempt,
       body: normalizedBody,
       actions: {
@@ -121,18 +120,27 @@ export async function forwardCompactWithFallback({
         endpoint: '/v1/responses/compact',
         model: attemptSlug,
         upstreamModel: attemptRoute.upstream_model,
-        network: attemptProxyUrl ? 'proxy' : 'direct',
+        network: attemptProxy.mode,
         attempt: currentAttempt,
         status: result.status ?? (result.error ? 502 : null),
         upstreamHost: result.upstreamHost || '',
         error: result.error || (result.status >= 400 ? new Error(`HTTP ${result.status}`) : null),
       });
     }
-    return { ...result, proxyUrl: attemptProxyUrl };
+    return { ...result, proxyUrl: attemptProxyUrl, networkMode: attemptProxy.mode };
   };
 
   try {
-    let result = await attempt(slug, route);
+    firstProxy = await selectProxy(slug);
+    lastNetworkMode = firstProxy.mode;
+    monitorRequestId = historyMonitor?.startRequest({
+      endpoint: '/v1/responses/compact',
+      model: slug,
+      route,
+      network: firstProxy.mode,
+      body,
+    });
+    let result = await attempt(slug, route, firstProxy);
     logAttempt(logger, slug, result);
     if (clientClosed) return;
 
@@ -159,7 +167,7 @@ export async function forwardCompactWithFallback({
         endpoint: '/v1/responses/compact',
         model: attemptNumber > 1 ? fallbackSlug : slug,
         upstreamModel: attemptNumber > 1 ? fallbackRoute?.upstream_model : route.upstream_model,
-        network: (attemptNumber > 1 ? selectProxyUrl(fallbackSlug) : firstProxyUrl) ? 'proxy' : 'direct',
+        network: lastNetworkMode,
         attempt: attemptNumber || 1,
         status: 502,
         upstreamHost: '',
@@ -298,53 +306,6 @@ function copyRequestHeaders(sourceHeaders) {
   return headers;
 }
 
-function createProxyAgent(proxyUrl) {
-  const agent = new https.Agent({ keepAlive: false });
-  agent.createConnection = (options, callback) => {
-    let done = false;
-    let connected = false;
-    const finish = (err, socket) => {
-      if (done) return;
-      done = true;
-      callback(err, socket);
-    };
-    let proxyUrlObject;
-    try {
-      proxyUrlObject = new URL(proxyUrl);
-    } catch (err) {
-      finish(err);
-      return;
-    }
-    const targetHost = options.host || options.servername || '';
-    const targetPort = options.port || 443;
-    const socket = net.connect(Number(proxyUrlObject.port || 80), proxyUrlObject.hostname);
-    socket.on('connect', () => {
-      socket.write(`CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n\r\n`);
-    });
-    let buffer = '';
-    const onData = (chunk) => {
-      if (done || connected) return;
-      buffer += chunk.toString('latin1');
-      const endOfHeaders = buffer.indexOf('\r\n\r\n');
-      if (endOfHeaders === -1) return;
-      const head = buffer.slice(0, endOfHeaders);
-      if (!/^HTTP\/1\.[01] 200/.test(head)) {
-        socket.destroy();
-        finish(new Error(`proxy CONNECT failed: ${head.split('\r\n')[0]}`));
-        return;
-      }
-      connected = true;
-      socket.removeListener('data', onData);
-      const tlsSocket = tls.connect({ socket, servername: targetHost });
-      tlsSocket.once('secureConnect', () => finish(null, tlsSocket));
-      tlsSocket.once('error', finish);
-    };
-    socket.on('data', onData);
-    socket.on('error', finish);
-  };
-  return agent;
-}
-
 function firstHeader(value) {
   return Array.isArray(value) ? (value[0] || '') : (value || '');
 }
@@ -354,7 +315,7 @@ function isSuccessful(result) {
 }
 
 function logAttempt(logger, slug, result) {
-  const networkMode = result.proxyUrl ? 'proxy' : 'direct';
+  const networkMode = result.networkMode || (result.proxyUrl ? 'fixed-proxy' : 'direct');
   if (result.error) {
     logger.error(
       `[codex-proxy] POST /v1/responses/compact model=${slug} network=${networkMode} -> ${result.upstreamHost} err=${result.error.message}`,

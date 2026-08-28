@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   createProxyServer,
+  createUpstreamProxyResolver,
   loadConfig,
   loadSecrets,
   parseDirectModels,
@@ -179,8 +180,14 @@ function startMockUpstream() {
   });
 }
 
-function startProxy(config, secrets, env = {}, logger = silentLogger) {
-  const server = createProxyServer({ config, secrets, logger, env });
+function startProxy(
+  config,
+  secrets,
+  env = {},
+  logger = silentLogger,
+  systemProxyResolver = async () => ({ url: '', mode: 'direct' }),
+) {
+  const server = createProxyServer({ config, secrets, logger, env, systemProxyResolver });
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
       resolve({ server, baseUrl: `http://127.0.0.1:${server.address().port}` });
@@ -203,13 +210,19 @@ async function closeServers(...servers) {
   }
 }
 
-async function withServers(fn, { secrets = testSecrets(), env = {}, logger = silentLogger } = {}) {
+async function withServers(fn, {
+  secrets = testSecrets(),
+  env = {},
+  logger = silentLogger,
+  systemProxyResolver,
+} = {}) {
   const mock = await startMockUpstream();
   const proxy = await startProxy(
     { host: '127.0.0.1', port: 0, models: testRoutes(mock.baseUrl), catalog: testCatalog() },
     secrets,
     env,
     logger,
+    systemProxyResolver,
   );
   try {
     await fn(mock, proxy, logger);
@@ -376,10 +389,10 @@ test('普通请求按 DIRECT_MODELS 选择代理或直连', async () => {
       await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input: 'hello' });
       await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash-direct', input: 'hello' });
       await postJson(proxy.baseUrl, { model: 'ox-alpha', input: 'hello' });
-      assert.ok(logs.some((message) => message.includes('model=gpt-5.6-sol network=proxy')));
+      assert.ok(logs.some((message) => message.includes('model=gpt-5.6-sol network=fixed-proxy')));
       assert.ok(logs.some((message) => message.includes('model=deepseek-v4-flash network=direct')));
       assert.ok(logs.some((message) => message.includes('model=deepseek-v4-flash-direct network=direct')));
-      assert.ok(logs.some((message) => message.includes('model=ox-alpha network=proxy')));
+      assert.ok(logs.some((message) => message.includes('model=ox-alpha network=fixed-proxy')));
       assert.equal(mock.seen.length, 4);
     },
     {
@@ -520,6 +533,96 @@ test('混合历史分别发往 GPT、OC DS 与直连 DS 时只清空各自冲突
       userMessageFixture,
     ]);
   });
+});
+
+test('代理优先级为直连白名单、PROXY_URL、配置固定代理、Windows 系统代理', async () => {
+  let systemCalls = 0;
+  const systemProxyResolver = async () => {
+    systemCalls += 1;
+    return { url: 'http://127.0.0.1:7890', mode: 'system-proxy' };
+  };
+  const directModels = new Set(['direct-model']);
+
+  const envFixed = createUpstreamProxyResolver({
+    config: { proxy: 'http://config.example:8000' },
+    env: { PROXY_URL: 'http://env.example:9000' },
+    directModels,
+    systemProxyResolver,
+  });
+  assert.deepEqual(await envFixed('direct-model'), { url: '', mode: 'direct' });
+  assert.deepEqual(await envFixed('other-model'), {
+    url: 'http://env.example:9000',
+    mode: 'fixed-proxy',
+  });
+
+  const forcedDirect = createUpstreamProxyResolver({
+    config: { proxy: 'http://config.example:8000' },
+    env: { PROXY_URL: '' },
+    directModels: new Set(),
+    systemProxyResolver,
+  });
+  assert.deepEqual(await forcedDirect('other-model'), { url: '', mode: 'direct' });
+
+  const configFixed = createUpstreamProxyResolver({
+    config: { proxy: 'http://config.example:8000' },
+    env: {},
+    directModels: new Set(),
+    systemProxyResolver,
+  });
+  assert.deepEqual(await configFixed('other-model'), {
+    url: 'http://config.example:8000',
+    mode: 'fixed-proxy',
+  });
+
+  const dynamic = createUpstreamProxyResolver({
+    config: {},
+    env: {},
+    directModels: new Set(),
+    systemProxyResolver,
+  });
+  assert.deepEqual(await dynamic('other-model'), {
+    url: 'http://127.0.0.1:7890',
+    mode: 'system-proxy',
+  });
+  assert.equal(systemCalls, 1);
+});
+
+test('普通请求动态解析 Windows 系统代理，首次解析失败时返回 502', async () => {
+  const logs = [];
+  let calls = 0;
+  const logger = {
+    info: (message) => logs.push(message),
+    error: (message) => logs.push(message),
+    warn: (message) => logs.push(message),
+  };
+  await withServers(
+    async (mock, proxy) => {
+      const first = await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input: 'first' });
+      const second = await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input: 'second' });
+      assert.equal(first.status, 200);
+      assert.equal(second.status, 200);
+      assert.equal(calls, 2);
+      assert.ok(logs.some((message) => message.includes('network=system-proxy')));
+      assert.equal(mock.seen.length, 2);
+    },
+    {
+      logger,
+      systemProxyResolver: async () => {
+        calls += 1;
+        return { url: `http://127.0.0.1:${calls === 1 ? 7890 : 7891}`, mode: 'system-proxy' };
+      },
+    },
+  );
+
+  await withServers(
+    async (mock, proxy) => {
+      const result = await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input: 'hello' });
+      assert.equal(result.status, 502);
+      assert.match(JSON.parse(result.text).error.message, /无法确定上游代理/);
+      assert.equal(mock.seen.length, 0);
+    },
+    { systemProxyResolver: async () => { throw new Error('注册表读取失败'); } },
+  );
 });
 
 test('畸形与不完整 reasoning 对 GPT 和 DS 均保留并安全清空冲突字段', async () => {

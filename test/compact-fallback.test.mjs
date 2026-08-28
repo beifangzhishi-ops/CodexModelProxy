@@ -36,7 +36,11 @@ function startMockUpstream({ failModels = new Set() } = {}) {
   });
 }
 
-function startProxy(upstreamBaseUrl, { env = {}, logger = silentLogger } = {}) {
+function startProxy(upstreamBaseUrl, {
+  env = {},
+  logger = silentLogger,
+  systemProxyResolver = async () => ({ url: '', mode: 'direct' }),
+} = {}) {
   const config = {
     compact_fallback_model: 'flash-model',
     models: {
@@ -62,6 +66,7 @@ function startProxy(upstreamBaseUrl, { env = {}, logger = silentLogger } = {}) {
     secrets: { FLASH_API_KEY: 'flash-test-key' },
     logger,
     env,
+    systemProxyResolver,
   });
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => resolve({
@@ -139,7 +144,7 @@ test('压缩请求首次和备用请求分别选择网络路径', async () => {
     async (upstream, proxy) => {
       const result = await postCompact(proxy.baseUrl, 'default-model');
       assert.equal(result.status, 200);
-      assert.ok(logs.some((message) => message.includes('model=default-model network=proxy')));
+      assert.ok(logs.some((message) => message.includes('model=default-model network=fixed-proxy')));
       assert.ok(logs.some((message) => message.includes('model=flash-model network=direct')));
       assert.equal(upstream.seen.length, 2);
     },
@@ -239,4 +244,34 @@ test('压缩首次请求按 GPT 格式整理，后备请求从原始历史按 DS
       message,
     ]);
   });
+});
+
+test('压缩首次与后备请求分别动态选择系统代理', async () => {
+  const logs = [];
+  let calls = 0;
+  const logger = {
+    info: (message) => logs.push(message),
+    error: (message) => logs.push(message),
+    warn: (message) => logs.push(message),
+  };
+  await withProxy(
+    { failModels: new Set(['default-upstream']) },
+    async (upstream, proxy) => {
+      const result = await postCompact(proxy.baseUrl, 'default-model');
+      assert.equal(result.status, 200);
+      assert.equal(calls, 2);
+      assert.ok(logs.some((message) => message.includes('model=default-model network=system-proxy')));
+      assert.ok(logs.some((message) => message.includes('model=flash-model network=direct')));
+      assert.equal(upstream.seen.length, 2);
+    },
+    {
+      logger,
+      systemProxyResolver: async () => {
+        calls += 1;
+        return calls === 1
+          ? { url: 'http://127.0.0.1:7890', mode: 'system-proxy' }
+          : { url: '', mode: 'direct' };
+      },
+    },
+  );
 });

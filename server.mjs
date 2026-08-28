@@ -5,8 +5,6 @@
 
 import http from 'node:http';
 import https from 'node:https';
-import net from 'node:net';
-import tls from 'node:tls';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -17,6 +15,8 @@ import {
   isValidToolOutputFormat,
 } from './history-normalize.mjs';
 import { createHistoryMonitor } from './history-monitor.mjs';
+import { createWindowsSystemProxyResolver } from './system-proxy.mjs';
+import { createProxyAgent } from './proxy-agent.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_FILE = path.join(__dirname, 'proxy-config.json');
@@ -54,6 +54,29 @@ export function parseDirectModels(raw, routes) {
 
 export function resolveProxyUrl(proxyUrl, directModels, slug) {
   return directModels.has(slug) ? '' : proxyUrl;
+}
+
+export function createUpstreamProxyResolver({
+  config,
+  env,
+  directModels,
+  systemProxyResolver,
+}) {
+  const hasEnvOverride = env.PROXY_URL !== undefined;
+  const configProxyUrl = String(config.proxy || '').trim();
+  const hasConfigOverride = !hasEnvOverride && configProxyUrl.length > 0;
+  const fixedProxyUrl = hasEnvOverride ? String(env.PROXY_URL).trim() : configProxyUrl;
+
+  return async (slug) => {
+    if (directModels.has(slug)) return { url: '', mode: 'direct' };
+    if (hasEnvOverride || hasConfigOverride) {
+      return {
+        url: fixedProxyUrl,
+        mode: fixedProxyUrl ? 'fixed-proxy' : 'direct',
+      };
+    }
+    return systemProxyResolver();
+  };
 }
 
 export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT_CONFIG_FILE) {
@@ -156,16 +179,20 @@ export function createProxyServer({
   env = process.env,
   directModels: configuredDirectModels,
   historyMonitor: configuredHistoryMonitor,
+  systemProxyResolver: configuredSystemProxyResolver,
 }) {
   const routes = config.models || {};
   const catalogModels = Array.isArray(config.catalog?.models) ? config.catalog.models : null;
   const compactFallbackSlug = config.compact_fallback_model || 'deepseek-v4-flash';
   const accessToken = (env.PROXY_ACCESS_TOKEN || config.access_token || '').trim();
-  const proxyUrl = env.PROXY_URL !== undefined
-    ? String(env.PROXY_URL).trim()
-    : String(config.proxy || '').trim();
   const directModels = configuredDirectModels || parseDirectModels(env.DIRECT_MODELS, routes);
-  const proxyUrlForModel = (slug) => resolveProxyUrl(proxyUrl, directModels, slug);
+  const systemProxyResolver = configuredSystemProxyResolver || createWindowsSystemProxyResolver({ logger });
+  const proxyForModel = createUpstreamProxyResolver({
+    config,
+    env,
+    directModels,
+    systemProxyResolver,
+  });
   const requireToken = accessToken.length > 0;
   const historyMonitor = configuredHistoryMonitor || createHistoryMonitor({ env, logger });
 
@@ -205,7 +232,7 @@ export function createProxyServer({
     }
 
     if (req.method === 'POST' && pathname === '/v1/responses') {
-      readJsonBody(req, (err, body) => {
+      readJsonBody(req, async (err, body) => {
         if (err) {
           sendJson(res, 400, {
             error: { type: 'invalid_request_error', message: `请求体解析失败：${err.message}` },
@@ -221,18 +248,27 @@ export function createProxyServer({
           });
           return;
         }
-        forwardToUpstream(
-          req,
-          res,
-          body,
-          model,
-          route,
-          secrets,
-          logger,
-          proxyUrlForModel(model),
-          env,
-          historyMonitor,
-        );
+        try {
+          const proxy = await proxyForModel(model);
+          forwardToUpstream(
+            req,
+            res,
+            body,
+            model,
+            route,
+            secrets,
+            logger,
+            proxy.url,
+            proxy.mode,
+            env,
+            historyMonitor,
+          );
+        } catch (proxyError) {
+          logger.error(`[codex-proxy] 系统代理解析失败 model=${model} err=${proxyError.message}`);
+          sendJson(res, 502, {
+            error: { type: 'upstream_error', message: `无法确定上游代理：${proxyError.message}` },
+          });
+        }
       });
       return;
     }
@@ -264,8 +300,7 @@ export function createProxyServer({
           fallbackRoute: routes[compactFallbackSlug],
           secrets,
           logger,
-          proxyUrl,
-          proxyUrlForModel,
+          proxyForModel,
           env,
           historyMonitor,
         });
@@ -417,54 +452,6 @@ function readJsonBody(req, callback) {
   req.on('error', (err) => finish(err));
 }
 
-function createProxyAgent(proxyUrl) {
-  const agent = new https.Agent({ keepAlive: false });
-  agent.createConnection = (options, callback) => {
-    let done = false;
-    let connected = false;
-    const finish = (err, socket) => {
-      if (!done) {
-        done = true;
-        callback(err, socket);
-      }
-    };
-    let proxyUrlObj;
-    try {
-      proxyUrlObj = new URL(proxyUrl);
-    } catch (err) {
-      finish(err);
-      return;
-    }
-    const targetHost = options.host || options.servername || '';
-    const targetPort = options.port || 443;
-    const socket = net.connect(Number(proxyUrlObj.port || 80), proxyUrlObj.hostname);
-    socket.on('connect', () => {
-      socket.write(`CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n\r\n`);
-    });
-    let buf = '';
-    const onData = (chunk) => {
-      if (done || connected) return;
-      buf += chunk.toString('latin1');
-      const idx = buf.indexOf('\r\n\r\n');
-      if (idx === -1) return;
-      const head = buf.slice(0, idx);
-      if (!/^HTTP\/1\.[01] 200/.test(head)) {
-        socket.destroy();
-        finish(new Error(`proxy CONNECT failed: ${head.split('\r\n')[0]}`));
-        return;
-      }
-      connected = true;
-      socket.removeListener('data', onData);
-      const tlsSocket = tls.connect({ socket, servername: targetHost });
-      tlsSocket.once('secureConnect', () => finish(null, tlsSocket));
-      tlsSocket.once('error', finish);
-    };
-    socket.on('data', onData);
-    socket.on('error', finish);
-  };
-  return agent;
-}
-
 function forwardToUpstream(
   req,
   res,
@@ -474,10 +461,10 @@ function forwardToUpstream(
   secrets,
   logger,
   proxyUrl,
+  networkMode,
   env,
   historyMonitor,
 ) {
-  const networkMode = proxyUrl ? 'proxy' : 'direct';
   const monitorRequestId = historyMonitor.startRequest({
     endpoint: '/v1/responses',
     model: slug,
@@ -716,7 +703,13 @@ if (isMain()) {
     writePidFile(pidFile, process.pid);
     console.log(`[codex-proxy] 已启动：http://${host}:${port}`);
     console.log(`[codex-proxy] 模型路由：${Object.keys(config.models).join('、')}`);
-    console.log(`[codex-proxy] 上游网络：默认${(env.PROXY_URL !== undefined ? String(env.PROXY_URL).trim() : String(config.proxy || '').trim()) ? '代理' : '直连'}；直连白名单：${[...directModels].join('、') || '(空)'}`);
+    const configuredProxy = env.PROXY_URL !== undefined
+      ? String(env.PROXY_URL).trim()
+      : String(config.proxy || '').trim();
+    const defaultNetwork = env.PROXY_URL !== undefined
+      ? (configuredProxy ? '固定代理' : '直连')
+      : (configuredProxy ? '固定代理' : '动态 Windows 系统代理');
+    console.log(`[codex-proxy] 上游网络：默认${defaultNetwork}；直连白名单：${[...directModels].join('、') || '(空)'}`);
   });
   const shutdown = () => {
     removePidFile(pidFile);
