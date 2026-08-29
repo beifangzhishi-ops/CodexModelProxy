@@ -74,6 +74,14 @@
       "reasoning_format": "openai_encrypted",
       "tool_output_format": "passthrough",
       "tool_schema_compat": "muse"
+    },
+    "glm-5.3": {
+      "upstream_base_url": "https://api.z.ai/api/v1",
+      "upstream_model": "glm-5.3",
+      "auth_mode": "api_key",
+      "api_key_env": "ZAI_API_KEY",
+      "reasoning_format": "passthrough",
+      "tool_output_format": "passthrough"
     }
   }
 }
