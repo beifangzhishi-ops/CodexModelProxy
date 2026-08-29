@@ -20,6 +20,14 @@ const FOREIGN_ENCRYPTED_CONTENT_REFERENCE =
   /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}-\d+$/i;
 const OPENAI_ITEM_ID = /^[A-Za-z0-9_-]+$/;
 const INVALID_OPENAI_ITEM_ID_CHARACTERS = /[^A-Za-z0-9_-]+/g;
+const OPENAI_ITEM_ID_PREFIXES = Object.freeze({
+  message: 'msg_',
+  reasoning: 'rs_',
+  function_call: 'fc_',
+  function_call_output: 'fco_',
+  custom_tool_call: 'ctc_',
+  custom_tool_call_output: 'ctco_',
+});
 
 export function isValidReasoningFormat(value) {
   return VALID_FORMATS.has(value);
@@ -42,16 +50,30 @@ export function normalizeResponsesBody(
   }
   const removedReasoningIndexes = [];
   const removedWebSearchIndexes = [];
+  const normalizedItemIdIndexes = [];
   const normalizedReasoningIndexes = [];
   const normalizedToolOutputIndexes = [];
+  const itemIdChanges = [];
   const reasoningChanges = [];
   const toolOutputChanges = [];
   const normalizedInput = [];
   for (let index = 0; index < body.input.length; index++) {
     const item = body.input[index];
     let normalizedItem = item;
-    if (isReasoningItem(item)) {
-      const reasoningResult = normalizeReasoningItem(item, reasoningFormat);
+    if (reasoningFormat === REASONING_FORMATS.OPENAI_ENCRYPTED) {
+      const itemIdResult = normalizeOpenAIItemId(normalizedItem);
+      if (itemIdResult.changed) {
+        normalizedItem = itemIdResult.item;
+        normalizedItemIdIndexes.push(index);
+        itemIdChanges.push({
+          index,
+          type: typeof item.type === 'string' ? item.type : '',
+          actions: itemIdResult.actions,
+        });
+      }
+    }
+    if (isReasoningItem(normalizedItem)) {
+      const reasoningResult = normalizeReasoningItem(normalizedItem, reasoningFormat);
       if (reasoningResult.changed) {
         normalizedItem = reasoningResult.item;
         normalizedReasoningIndexes.push(index);
@@ -83,6 +105,7 @@ export function normalizeResponsesBody(
   if (
     removedReasoningIndexes.length === 0 &&
     removedWebSearchIndexes.length === 0 &&
+    normalizedItemIdIndexes.length === 0 &&
     normalizedReasoningIndexes.length === 0 &&
     normalizedToolOutputIndexes.length === 0
   ) {
@@ -92,8 +115,10 @@ export function normalizeResponsesBody(
     body: { ...body, input: normalizedInput },
     removedReasoningIndexes,
     removedWebSearchIndexes,
+    normalizedItemIdIndexes,
     normalizedReasoningIndexes,
     normalizedToolOutputIndexes,
+    itemIdChanges,
     reasoningChanges,
     toolOutputChanges,
   };
@@ -104,8 +129,10 @@ function emptyNormalizationResult(body) {
     body,
     removedReasoningIndexes: [],
     removedWebSearchIndexes: [],
+    normalizedItemIdIndexes: [],
     normalizedReasoningIndexes: [],
     normalizedToolOutputIndexes: [],
+    itemIdChanges: [],
     reasoningChanges: [],
     toolOutputChanges: [],
   };
@@ -136,6 +163,27 @@ function keepWebSearchCall(item, reasoningFormat) {
   return typeof item.id === 'string' && item.id.startsWith('ws');
 }
 
+function normalizeOpenAIItemId(item) {
+  if (!item || typeof item !== 'object' || typeof item.id !== 'string') {
+    return { item, changed: false, actions: [] };
+  }
+  let normalizedId = item.id;
+  const actions = [];
+  if (!OPENAI_ITEM_ID.test(normalizedId)) {
+    normalizedId = normalizedId.replace(INVALID_OPENAI_ITEM_ID_CHARACTERS, '_') || '_';
+    actions.push('characters');
+  }
+  const expectedPrefix = OPENAI_ITEM_ID_PREFIXES[item.type];
+  if (expectedPrefix && !normalizedId.startsWith(expectedPrefix)) {
+    normalizedId = `${expectedPrefix}${normalizedId}`;
+    actions.push('prefix');
+  }
+  if (normalizedId === item.id) {
+    return { item, changed: false, actions: [] };
+  }
+  return { item: { ...item, id: normalizedId }, changed: true, actions };
+}
+
 function normalizeReasoningItem(item, reasoningFormat) {
   if (reasoningFormat === REASONING_FORMATS.PASSTHROUGH) {
     return { item, changed: false, fields: [] };
@@ -143,13 +191,6 @@ function normalizeReasoningItem(item, reasoningFormat) {
   let normalizedItem = item;
   const fields = [];
   if (reasoningFormat === REASONING_FORMATS.OPENAI_ENCRYPTED) {
-    if (typeof item.id === 'string' && !OPENAI_ITEM_ID.test(item.id)) {
-      normalizedItem = {
-        ...normalizedItem,
-        id: item.id.replace(INVALID_OPENAI_ITEM_ID_CHARACTERS, '_'),
-      };
-      fields.push('id');
-    }
     const content = item.content;
     const contentConflicts =
       Object.prototype.hasOwnProperty.call(item, 'content') &&

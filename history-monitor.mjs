@@ -213,8 +213,20 @@ function summarizeActions(actions) {
   return {
     removed_reasoning_indexes: summarizeIndexes(source.removed_reasoning_indexes),
     removed_web_search_indexes: summarizeIndexes(source.removed_web_search_indexes),
+    normalized_item_id_indexes: summarizeIndexes(source.normalized_item_id_indexes),
     normalized_reasoning_indexes: summarizeIndexes(source.normalized_reasoning_indexes),
     normalized_tool_output_indexes: summarizeIndexes(source.normalized_tool_output_indexes),
+    item_id_changes: Array.isArray(source.item_id_changes)
+      ? source.item_id_changes
+        .filter((change) => change && Number.isInteger(change.index))
+        .map((change) => ({
+          index: change.index,
+          type: typeof change.type === 'string' ? change.type : '',
+          actions: Array.isArray(change.actions)
+            ? change.actions.filter((action) => action === 'characters' || action === 'prefix')
+            : [],
+        }))
+      : [],
     reasoning_changes: Array.isArray(source.reasoning_changes)
       ? source.reasoning_changes
         .filter((change) => change && Number.isInteger(change.index))

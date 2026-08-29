@@ -104,8 +104,15 @@ test('开启监控后记录三类脱敏事件并保持关联 ID', () => {
       attempt: 1,
       body: sensitiveBody,
       actions: {
+        normalized_item_id_indexes: [1],
         normalized_reasoning_indexes: [0],
         normalized_tool_output_indexes: [2],
+        item_id_changes: [{
+          index: 1,
+          type: 'message',
+          actions: ['prefix', 'ignored'],
+          original_id: 'SECRET_ITEM_ID_SHOULD_NOT_BE_LOGGED',
+        }],
         reasoning_changes: [{
           index: 0,
           fields: ['encrypted_content'],
@@ -150,6 +157,10 @@ test('开启监控后记录三类脱敏事件并保持关联 ID', () => {
     assert.deepEqual(events[1].actions.reasoning_changes, [
       { index: 0, fields: ['encrypted_content'] },
     ]);
+    assert.deepEqual(events[1].actions.normalized_item_id_indexes, [1]);
+    assert.deepEqual(events[1].actions.item_id_changes, [
+      { index: 1, type: 'message', actions: ['prefix'] },
+    ]);
     assert.deepEqual(events[1].actions.tool_output_changes, [
       { index: 2, type: 'function_call_output', from: 'array', to: 'string', bytes: 123 },
     ]);
@@ -167,6 +178,7 @@ test('开启监控后记录三类脱敏事件并保持关联 ID', () => {
       'ACTION_REASONING_BODY_SHOULD_NOT_BE_LOGGED',
       'ACTION_TOOL_OUTPUT_SHOULD_NOT_BE_LOGGED',
       'ACTION_BODY_SHOULD_NOT_BE_LOGGED',
+      'SECRET_ITEM_ID_SHOULD_NOT_BE_LOGGED',
       'SHORT_IMAGE_DATA',
     ]) {
       assert.equal(raw.includes(secret), false, `监控日志不应包含 ${secret}`);

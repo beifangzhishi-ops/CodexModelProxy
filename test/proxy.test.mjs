@@ -717,6 +717,28 @@ const museReasoningFixture = {
   content: null,
 };
 
+const museMessageFixture = {
+  type: 'message',
+  id: 'rs_01a04c8e57b57771947c7cd31c8770d7',
+  role: 'assistant',
+  content: [{ type: 'output_text', text: 'muse reply' }],
+};
+
+const museCustomToolCallFixture = {
+  type: 'custom_tool_call',
+  id: 'fc_01a04c9483b172c18998f81238bbdb2a',
+  call_id: 'call_01a04c9483b172c18998f81238bbdb2a',
+  name: 'apply_patch',
+  input: 'patch',
+};
+
+const museCustomToolOutputFixture = {
+  type: 'custom_tool_call_output',
+  id: 'ctco_01a04c948dcb7eaf8e0c20159ca1a89c',
+  call_id: 'call_01a04c9483b172c18998f81238bbdb2a',
+  output: 'ok',
+};
+
 const userMessageFixture = {
   type: 'message',
   role: 'user',
@@ -788,11 +810,18 @@ test('混合历史分别发往 GPT、OC DS 与直连 DS 时只清空各自冲突
   });
 });
 
-test('从 Muse 切换到 GPT 时规范化复合 reasoning ID', async () => {
+test('从 Muse 切换到 GPT 时按项目类型规范化 ID', async () => {
   await withServers(async (mock, proxy) => {
+    const input = [
+      museReasoningFixture,
+      museMessageFixture,
+      museCustomToolCallFixture,
+      museCustomToolOutputFixture,
+      userMessageFixture,
+    ];
     const result = await postJson(
       proxy.baseUrl,
-      { model: 'gpt-5.6-sol', input: [museReasoningFixture, userMessageFixture] },
+      { model: 'gpt-5.6-sol', input },
       { authorization: 'Bearer chatgpt-login-token' },
     );
     assert.equal(result.status, 200);
@@ -802,6 +831,17 @@ test('从 Muse 切换到 GPT 时规范化复合 reasoning ID', async () => {
         id: 'rs_6a9293021ea061d200224fc9_rs_01a04c8e4ce57b009cecb10de9ea4803',
         content: [],
       },
+      { ...museMessageFixture, id: `msg_${museMessageFixture.id}` },
+      { ...museCustomToolCallFixture, id: `ctc_${museCustomToolCallFixture.id}` },
+      museCustomToolOutputFixture,
+      userMessageFixture,
+    ]);
+    assert.equal(mock.seen[0].body.input[2].call_id, mock.seen[0].body.input[3].call_id);
+    assert.deepEqual(input, [
+      museReasoningFixture,
+      museMessageFixture,
+      museCustomToolCallFixture,
+      museCustomToolOutputFixture,
       userMessageFixture,
     ]);
   });

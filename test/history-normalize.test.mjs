@@ -38,6 +38,28 @@ const museReasoning = {
   encrypted_content: 'opaque-muse-state',
 };
 
+const museMessage = {
+  type: 'message',
+  id: 'rs_01a04c8e57b57771947c7cd31c8770d7',
+  role: 'assistant',
+  content: [{ type: 'output_text', text: 'muse reply' }],
+};
+
+const museCustomToolCall = {
+  type: 'custom_tool_call',
+  id: 'fc_01a04c9483b172c18998f81238bbdb2a',
+  call_id: 'call_01a04c9483b172c18998f81238bbdb2a',
+  name: 'apply_patch',
+  input: 'patch',
+};
+
+const museCustomToolOutput = {
+  type: 'custom_tool_call_output',
+  id: 'ctco_01a04c948dcb7eaf8e0c20159ca1a89c',
+  call_id: 'call_01a04c9483b172c18998f81238bbdb2a',
+  output: 'ok',
+};
+
 const userMessage = {
   type: 'message',
   role: 'user',
@@ -95,8 +117,10 @@ test('GPT 目标仅清空 OC/DS 外部 reasoning 引用，保留项目和原请�
   assert.equal(result.body.input[1], gptReasoning);
 });
 
-test('Muse 切换到 GPT 时规范化复合 reasoning ID，保留密文和原请求', () => {
-  const body = { input: [museReasoning, userMessage] };
+test('Muse 切换到 GPT 时按类型规范化输入项 ID，保留密文、配对和原请求', () => {
+  const body = {
+    input: [museReasoning, museMessage, museCustomToolCall, museCustomToolOutput, userMessage],
+  };
   const result = normalizeResponsesBody(body, GPT);
 
   assert.deepEqual(result.body.input, [
@@ -105,12 +129,24 @@ test('Muse 切换到 GPT 时规范化复合 reasoning ID，保留密文和原请
       id: 'rs_6a9293021ea061d200224fc9_rs_01a04c8e4ce57b009cecb10de9ea4803',
       content: [],
     },
+    { ...museMessage, id: `msg_${museMessage.id}` },
+    { ...museCustomToolCall, id: `ctc_${museCustomToolCall.id}` },
+    museCustomToolOutput,
     userMessage,
   ]);
+  assert.deepEqual(result.normalizedItemIdIndexes, [0, 1, 2]);
+  assert.deepEqual(result.itemIdChanges, [
+    { index: 0, type: 'reasoning', actions: ['characters'] },
+    { index: 1, type: 'message', actions: ['prefix'] },
+    { index: 2, type: 'custom_tool_call', actions: ['prefix'] },
+  ]);
   assert.deepEqual(result.normalizedReasoningIndexes, [0]);
-  assert.deepEqual(result.reasoningChanges, [{ index: 0, fields: ['id', 'content'] }]);
+  assert.deepEqual(result.reasoningChanges, [{ index: 0, fields: ['content'] }]);
   assert.equal(result.body.input[0].encrypted_content, museReasoning.encrypted_content);
+  assert.equal(result.body.input[2].call_id, museCustomToolOutput.call_id);
   assert.equal(body.input[0], museReasoning);
+  assert.equal(body.input[1], museMessage);
+  assert.equal(body.input[2], museCustomToolCall);
 });
 
 test('DS 目标保留 reasoning 项，仅清空冲突的 encrypted_content', () => {
@@ -129,7 +165,7 @@ test('DS 目标保留 reasoning 项，仅清空冲突的 encrypted_content', () 
 });
 
 test('passthrough 目标保留所有 reasoning', () => {
-  const input = [dsReasoning, gptReasoning];
+  const input = [dsReasoning, gptReasoning, museMessage, museCustomToolCall];
   const body = { input };
   const result = normalizeResponsesBody(body, PASSTHROUGH);
   assert.equal(result.body, body);

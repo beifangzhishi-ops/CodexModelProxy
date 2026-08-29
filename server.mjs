@@ -598,8 +598,10 @@ function forwardToUpstream(
     body: normalizedBody,
     removedReasoningIndexes,
     removedWebSearchIndexes,
+    normalizedItemIdIndexes,
     normalizedReasoningIndexes,
     normalizedToolOutputIndexes,
+    itemIdChanges,
     reasoningChanges,
     toolOutputChanges,
   } = normalization;
@@ -614,8 +616,10 @@ function forwardToUpstream(
     actions: {
       removed_reasoning_indexes: removedReasoningIndexes,
       removed_web_search_indexes: removedWebSearchIndexes,
+      normalized_item_id_indexes: normalizedItemIdIndexes,
       normalized_reasoning_indexes: normalizedReasoningIndexes,
       normalized_tool_output_indexes: normalizedToolOutputIndexes,
+      item_id_changes: itemIdChanges,
       reasoning_changes: reasoningChanges,
       tool_output_changes: toolOutputChanges,
     },
@@ -673,6 +677,9 @@ function forwardToUpstream(
   const lib = upstreamUrl.protocol === 'https:' ? https : http;
   const agent = upstreamUrl.protocol === 'https:' && proxyUrl ? createProxyAgent(proxyUrl) : undefined;
   const removedParts = [];
+  if (normalizedItemIdIndexes.length > 0) {
+    removedParts.push(`输入项 ID ${normalizedItemIdIndexes.length} 项已整理`);
+  }
   if (normalizedReasoningIndexes.length > 0) {
     removedParts.push(`reasoning ${normalizedReasoningIndexes.length} 项兼容字段已整理`);
   }
