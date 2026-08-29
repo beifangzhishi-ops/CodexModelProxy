@@ -14,6 +14,11 @@ import {
   isValidReasoningFormat,
   isValidToolOutputFormat,
 } from './history-normalize.mjs';
+import {
+  prepareMuseRequest,
+  restoreMuseJsonPayload,
+  MuseSseRestoreTransform,
+} from './muse-tool-compat.mjs';
 import { createHistoryMonitor } from './history-monitor.mjs';
 import { createWindowsSystemProxyResolver } from './system-proxy.mjs';
 import { createProxyAgent } from './proxy-agent.mjs';
@@ -507,6 +512,54 @@ function readJsonBody(req, callback) {
   req.on('error', (err) => finish(err));
 }
 
+function relayRestoredMuseJson(res, upRes, status, headers, museContext, logger, slug) {
+  const chunks = [];
+  let bytes = 0;
+  let overflow = false;
+  upRes.on('data', (chunk) => {
+    if (overflow) return;
+    bytes += chunk.length;
+    if (bytes > MAX_BODY_BYTES) {
+      overflow = true;
+      chunks.length = 0;
+      return;
+    }
+    chunks.push(chunk);
+  });
+  upRes.on('end', () => {
+    if (overflow) {
+      logger.error(`[codex-proxy] Muse JSON 响应超过缓冲上限，终止连接 model=${slug}`);
+      res.destroy();
+      return;
+    }
+    const raw = Buffer.concat(chunks).toString('utf8');
+    try {
+      const payload = JSON.parse(raw);
+      const restored = restoreMuseJsonPayload(payload, museContext);
+      if (restored === payload) {
+        res.writeHead(status, headers);
+        res.end(raw);
+        return;
+      }
+      const body = JSON.stringify(restored);
+      const nextHeaders = { ...headers };
+      nextHeaders['content-length'] = String(Buffer.byteLength(body));
+      res.writeHead(status, nextHeaders);
+      res.end(body);
+    } catch (err) {
+      logger.warn(
+        `[codex-proxy] Muse JSON 恢复失败，原样返回 model=${slug} err=${err.message}`,
+      );
+      res.writeHead(status, headers);
+      res.end(raw);
+    }
+  });
+  upRes.on('error', (err) => {
+    logger.error(`[codex-proxy] Muse JSON 响应读取失败 model=${slug} err=${err.message}`);
+    if (!res.headersSent) res.destroy();
+  });
+}
+
 function forwardToUpstream(
   req,
   res,
@@ -520,15 +573,22 @@ function forwardToUpstream(
   env,
   historyMonitor,
 ) {
+  let museContext = null;
+  let upstreamSourceBody = body;
+  if (route.tool_schema_compat === 'muse') {
+    const prepared = prepareMuseRequest(body);
+    upstreamSourceBody = prepared.body;
+    museContext = prepared.ctx;
+  }
   const monitorRequestId = historyMonitor.startRequest({
     endpoint: '/v1/responses',
     model: slug,
     route,
     network: networkMode,
-    body,
+    body: upstreamSourceBody,
   });
   const schemaCompatibleBody =
-    route.tool_schema_compat === 'muse' ? normalizeMuseToolSchema(body) : body;
+    route.tool_schema_compat === 'muse' ? normalizeMuseToolSchema(upstreamSourceBody) : upstreamSourceBody;
   const normalization = normalizeResponsesBody(
     schemaCompatibleBody,
     route.reasoning_format || 'passthrough',
@@ -680,6 +740,18 @@ function forwardToUpstream(
       });
     } else {
       logger.info(`[codex-proxy] POST /v1/responses model=${slug} network=${networkMode} -> ${upstreamUrl.host} status=${status}`);
+    }
+    if (museContext && status >= 200 && status < 300) {
+      const contentType = String(outHeaders['content-type'] || '').toLowerCase();
+      if (contentType.includes('text/event-stream')) {
+        res.writeHead(status, outHeaders);
+        upRes.pipe(new MuseSseRestoreTransform(museContext)).pipe(res);
+        return;
+      }
+      if (contentType.includes('application/json')) {
+        relayRestoredMuseJson(res, upRes, status, outHeaders, museContext, logger, slug);
+        return;
+      }
     }
     res.writeHead(status, outHeaders);
     upRes.pipe(res);

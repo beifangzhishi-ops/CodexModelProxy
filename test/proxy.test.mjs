@@ -320,19 +320,12 @@ test('Muse 路由补齐工具 required，其他路由与原请求体保持不变
     const tools = [
       {
         type: 'tool_search',
+        execution: 'client',
         parameters: {
           type: 'object',
           properties: { query: { type: 'string' }, limit: { type: 'integer' } },
           required: ['query'],
           additionalProperties: false,
-        },
-      },
-      {
-        type: 'web_search',
-        parameters: {
-          type: 'object',
-          properties: { q: { type: 'string' }, region: { type: 'string' } },
-          required: [],
         },
       },
       {
@@ -354,9 +347,10 @@ test('Muse 路由补齐工具 required，其他路由与原请求体保持不变
     assert.equal(museResult.status, 200);
     const museSeen = mock.seen[0];
     assert.equal(museSeen.body.model, 'muse-spark-1.2-contributor');
+    assert.equal(museSeen.body.tools[0].type, 'function');
+    assert.equal(museSeen.body.tools[0].name, 'tool_search');
     assert.deepEqual(museSeen.body.tools[0].parameters.required, ['query', 'limit']);
-    assert.deepEqual(museSeen.body.tools[1].parameters.required, ['q', 'region']);
-    assert.deepEqual(museSeen.body.tools[2].parameters.required, ['a', 'b']);
+    assert.deepEqual(museSeen.body.tools[1].parameters.required, ['a', 'b']);
     assert.deepEqual(museBody.tools[0].parameters.required, ['query']);
 
     const dsResult = await postJson(proxy.baseUrl, {
@@ -366,6 +360,72 @@ test('Muse 路由补齐工具 required，其他路由与原请求体保持不变
     });
     assert.equal(dsResult.status, 200);
     assert.deepEqual(mock.seen[1].body.tools[0].parameters.required, ['query']);
+  });
+});
+
+test('Muse 桥接把 namespace/custom/web_search 展平为上游可接受的工具', async () => {
+  await withServers(async (mock, proxy) => {
+    const longName = 'mcp__codex_apps__github__list_repository_pull_request_review_comments_for_branch';
+    const result = await postJson(proxy.baseUrl, {
+      model: 'muse-spark-1.2-contributor',
+      input: [
+        { type: 'input_text', text: 'hello' },
+        {
+          type: 'custom_tool_call',
+          call_id: 'custom_call_1',
+          name: 'apply_patch',
+          input: 'patch content',
+        },
+        {
+          type: 'custom_tool_call_output',
+          call_id: 'custom_call_1',
+          output: 'ok',
+        },
+      ],
+      tools: [
+        {
+          type: 'namespace',
+          name: 'mcp',
+          tools: [
+            { type: 'function', name: longName, inputSchema: { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] } },
+          ],
+        },
+        { type: 'custom', name: 'apply_patch', description: 'raw patch' },
+        {
+          type: 'tool_search',
+          execution: 'client',
+          description: 'search tools',
+          parameters: {
+            type: 'object',
+            properties: { query: { type: 'string' }, limit: { type: 'integer' } },
+            required: ['query'],
+          },
+        },
+        { type: 'web_search', search_content_types: ['text', 'image'], search_context_size: 'medium' },
+      ],
+    });
+    assert.equal(result.status, 200);
+    const seen = mock.seen[0].body;
+    const types = seen.tools.map((tool) => tool.type);
+    assert.ok(types.every((type) => type === 'function' || type === 'web_search'));
+    assert.ok(seen.tools.every((tool) => typeof tool.name !== 'string' || tool.name.length <= 64));
+    assert.ok(
+      seen.tools
+        .filter((tool) => tool.type === 'function' && tool.parameters)
+        .every((tool) => {
+          const keys = Object.keys(tool.parameters.properties || {});
+          return keys.every((key) => (tool.parameters.required || []).includes(key));
+        }),
+    );
+    const webSearch = seen.tools.find((tool) => tool.type === 'web_search');
+    assert.equal(Object.prototype.hasOwnProperty.call(webSearch, 'search_content_types'), false);
+    assert.equal(webSearch.search_context_size, 'medium');
+    const flattened = seen.tools.find((tool) => typeof tool.name === 'string' && tool.name.startsWith('mcp__'));
+    assert.ok(flattened);
+    assert.ok(flattened.name.length <= 64);
+    const customCall = seen.input.find((item) => item.call_id === 'custom_call_1' && item.type === 'function_call');
+    assert.equal(customCall.name, 'apply_patch');
+    assert.deepEqual(JSON.parse(customCall.arguments), { input: 'patch content' });
   });
 });
 
