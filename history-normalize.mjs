@@ -18,6 +18,8 @@ const VALID_TOOL_OUTPUT_FORMATS = new Set(Object.values(TOOL_OUTPUT_FORMATS));
 // OC/DS 会把自己的 reasoning 分段引用写进 encrypted_content；GPT 不应尝试验证这种外部引用。
 const FOREIGN_ENCRYPTED_CONTENT_REFERENCE =
   /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}-\d+$/i;
+const OPENAI_ITEM_ID = /^[A-Za-z0-9_-]+$/;
+const INVALID_OPENAI_ITEM_ID_CHARACTERS = /[^A-Za-z0-9_-]+/g;
 
 export function isValidReasoningFormat(value) {
   return VALID_FORMATS.has(value);
@@ -141,6 +143,13 @@ function normalizeReasoningItem(item, reasoningFormat) {
   let normalizedItem = item;
   const fields = [];
   if (reasoningFormat === REASONING_FORMATS.OPENAI_ENCRYPTED) {
+    if (typeof item.id === 'string' && !OPENAI_ITEM_ID.test(item.id)) {
+      normalizedItem = {
+        ...normalizedItem,
+        id: item.id.replace(INVALID_OPENAI_ITEM_ID_CHARACTERS, '_'),
+      };
+      fields.push('id');
+    }
     const content = item.content;
     const contentConflicts =
       Object.prototype.hasOwnProperty.call(item, 'content') &&

@@ -31,6 +31,13 @@ const foreignReasoningReference = {
   encrypted_content: '01234567-89ab-cdef-0123-456789abcdef-0',
 };
 
+const museReasoning = {
+  type: 'reasoning',
+  id: 'rs_6a9293021ea061d200224fc9:rs_01a04c8e4ce57b009cecb10de9ea4803',
+  content: null,
+  encrypted_content: 'opaque-muse-state',
+};
+
 const userMessage = {
   type: 'message',
   role: 'user',
@@ -86,6 +93,24 @@ test('GPT 目标仅清空 OC/DS 外部 reasoning 引用，保留项目和原请�
   assert.deepEqual(body.input, [foreignReasoningReference, gptReasoning, userMessage]);
   assert.equal(result.body.input[0].id, foreignReasoningReference.id);
   assert.equal(result.body.input[1], gptReasoning);
+});
+
+test('Muse 切换到 GPT 时规范化复合 reasoning ID，保留密文和原请求', () => {
+  const body = { input: [museReasoning, userMessage] };
+  const result = normalizeResponsesBody(body, GPT);
+
+  assert.deepEqual(result.body.input, [
+    {
+      ...museReasoning,
+      id: 'rs_6a9293021ea061d200224fc9_rs_01a04c8e4ce57b009cecb10de9ea4803',
+      content: [],
+    },
+    userMessage,
+  ]);
+  assert.deepEqual(result.normalizedReasoningIndexes, [0]);
+  assert.deepEqual(result.reasoningChanges, [{ index: 0, fields: ['id', 'content'] }]);
+  assert.equal(result.body.input[0].encrypted_content, museReasoning.encrypted_content);
+  assert.equal(body.input[0], museReasoning);
 });
 
 test('DS 目标保留 reasoning 项，仅清空冲突的 encrypted_content', () => {

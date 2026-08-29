@@ -710,6 +710,13 @@ const gptReasoningFixture = {
   content: [],
 };
 
+const museReasoningFixture = {
+  type: 'reasoning',
+  id: 'rs_6a9293021ea061d200224fc9:rs_01a04c8e4ce57b009cecb10de9ea4803',
+  encrypted_content: 'opaque-muse-state',
+  content: null,
+};
+
 const userMessageFixture = {
   type: 'message',
   role: 'user',
@@ -776,6 +783,25 @@ test('混合历史分别发往 GPT、OC DS 与直连 DS 时只清空各自冲突
     assert.deepEqual(mock.seen[2].body.input, [
       { ...dsReasoningFixture, encrypted_content: null },
       { ...gptReasoningFixture, encrypted_content: null },
+      userMessageFixture,
+    ]);
+  });
+});
+
+test('从 Muse 切换到 GPT 时规范化复合 reasoning ID', async () => {
+  await withServers(async (mock, proxy) => {
+    const result = await postJson(
+      proxy.baseUrl,
+      { model: 'gpt-5.6-sol', input: [museReasoningFixture, userMessageFixture] },
+      { authorization: 'Bearer chatgpt-login-token' },
+    );
+    assert.equal(result.status, 200);
+    assert.deepEqual(mock.seen[0].body.input, [
+      {
+        ...museReasoningFixture,
+        id: 'rs_6a9293021ea061d200224fc9_rs_01a04c8e4ce57b009cecb10de9ea4803',
+        content: [],
+      },
       userMessageFixture,
     ]);
   });
@@ -1052,7 +1078,7 @@ test('历史整理日志只记录数量，不泄露推理正文', async () => {
         { model: 'gpt-5.6-sol', input: [dsReasoningFixture, gptReasoningFixture, userMessageFixture] },
         { authorization: 'Bearer chatgpt-login-token' },
       );
-      assert.ok(logs.some((message) => message.includes('历史整理：reasoning 1 项冲突字段已清空')));
+      assert.ok(logs.some((message) => message.includes('历史整理：reasoning 1 项兼容字段已整理')));
       assert.ok(logs.every((message) => !message.includes('ds-thought') && !message.includes('opaque-gpt')));
     },
     { logger },

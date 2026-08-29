@@ -32,7 +32,7 @@ GLM-5.3 / GLM-5.3-Flash 使用 Z.AI 的 GLM Coding Plan 专用 Responses 端点�
 
 - 只处理 `POST /v1/responses`、`POST /v1/responses/compact` 与 `GET /v1/models`；所有路由固定追加 `/responses`。
 - 请求体除 `model` 替换为实际上游模型名外，还会按目标模型的 reasoning 格式整理推理历史；JSON 与 SSE 响应状态、响应头和正文原样返回。
-- 跨 GPT/DeepSeek 切换时保留所有 reasoning 项和项目顺序，只清空冲突字段：GPT 路由把非空或格式不兼容的 `content` 改为 `[]`；若发现 OC/DS 使用的“UUID + 分段号”外部引用误放在 `encrypted_content`，仅将该字段改为 `null`，正常 GPT 密文继续保留。OpenCode、直连 DeepSeek 与 OpenRouter 路由把已有的 `encrypted_content` 改为 `null`，保留明文 `content`。整理只影响本次上游请求，不修改 Codex 原会话，也不尝试恢复或伪造密文。
+- 跨 GPT/DeepSeek 切换时保留所有 reasoning 项和项目顺序，只整理冲突字段：GPT 路由把非空或格式不兼容的 `content` 改为 `[]`，并把 Muse 产生的含冒号复合 `id` 中连续非法字符替换为 `_`；若发现 OC/DS 使用的“UUID + 分段号”外部引用误放在 `encrypted_content`，仅将该字段改为 `null`，正常 GPT 密文继续保留。OpenCode、直连 DeepSeek 与 OpenRouter 路由把已有的 `encrypted_content` 改为 `null`，保留明文 `content`。整理只影响本次上游请求，不修改 Codex 原会话，也不尝试恢复或伪造密文。
 - 跨模型切换时同步整理网页搜索记录：GPT 路由只保留 `id` 以 `ws` 开头的 `web_search_call`，DS/Codex 风格的 `call_...` 搜索调用项从本次上游请求移除；助手消息中的搜索结论与引用不受影响。
 - OpenRouter 路由清空 reasoning 的 `encrypted_content`，并移除 OpenRouter 不接受的 `web_search_call`；普通消息、函数调用和工具结果不改名。
 - Z.AI 的 `glm-5.3` / `glm-5.3-flash` 路由使用 `reasoning_format: passthrough` 与 `tool_output_format: passthrough`：reasoning、`web_search_call`、工具输出、工具定义和请求正文完全原样转发，不做任何改写；若上游出现历史格式兼容错误，再按实际错误增加适配。
@@ -186,10 +186,10 @@ HISTORY_MONITOR_FILE=history-monitor.jsonl
 ## 测试
 
 ```text
-node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fallback.test.mjs test\history-monitor.test.mjs test\system-proxy.test.mjs
+node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fallback.test.mjs test\history-monitor.test.mjs test\system-proxy.test.mjs test\muse-tool-compat.test.mjs
 ```
 
-测试覆盖健康检查、模型列表、11 条路由、模型名与密钥隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、未知模型拦截，GPT/DeepSeek/OpenRouter reasoning 字段清空、`web_search_call` 过滤、畸形推理项保留、四条 DS 路由工具输出 JSON 文本化、Muse 工具展平/名称别名/JSON/SSE 调用恢复与原请求不可变、ZAI 直通保真、图片数组与调用配对保留，以及 Windows 系统代理格式、优先级、动态刷新、失败后备和历史监控。
+测试覆盖健康检查、模型列表、11 条路由、模型名与密钥隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、未知模型拦截，GPT/DeepSeek/OpenRouter reasoning 字段整理、Muse 复合 reasoning ID 规范化、`web_search_call` 过滤、畸形推理项保留、四条 DS 路由工具输出 JSON 文本化、Muse 工具展平/名称别名/JSON/SSE 调用恢复与原请求不可变、ZAI 直通保真、图片数组与调用配对保留，以及 Windows 系统代理格式、优先级、动态刷新、失败后备和历史监控。
 
 ## 已知限制
 

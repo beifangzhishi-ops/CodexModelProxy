@@ -674,7 +674,7 @@ function forwardToUpstream(
   const agent = upstreamUrl.protocol === 'https:' && proxyUrl ? createProxyAgent(proxyUrl) : undefined;
   const removedParts = [];
   if (normalizedReasoningIndexes.length > 0) {
-    removedParts.push(`reasoning ${normalizedReasoningIndexes.length} 项冲突字段已清空`);
+    removedParts.push(`reasoning ${normalizedReasoningIndexes.length} 项兼容字段已整理`);
   }
   if (normalizedToolOutputIndexes.length > 0) {
     removedParts.push(`工具输出 ${normalizedToolOutputIndexes.length} 项已转为 JSON 文本`);
