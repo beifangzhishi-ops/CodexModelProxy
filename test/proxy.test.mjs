@@ -23,6 +23,7 @@ const MODEL_SLUGS = [
   'deepseek-v4-flash-direct',
   'deepseek-v4-pro-direct',
   'ox-alpha',
+  'muse-spark-1.2-contributor',
 ];
 
 const silentLogger = { info() {}, error() {}, warn() {} };
@@ -112,6 +113,15 @@ function testRoutes(mockBaseUrl) {
       api_key_env: 'OPENROUTER_API_KEY',
       reasoning_format: 'openrouter_compatible',
       tool_output_format: 'passthrough',
+    },
+    'muse-spark-1.2-contributor': {
+      upstream_base_url: mockBaseUrl,
+      upstream_model: 'muse-spark-1.2-contributor',
+      auth_mode: 'api_key',
+      api_key_env: 'OPENCODE_API_KEY',
+      reasoning_format: 'openai_encrypted',
+      tool_output_format: 'passthrough',
+      tool_schema_compat: 'muse',
     },
   };
 }
@@ -231,7 +241,7 @@ async function withServers(fn, {
   }
 }
 
-test('健康检查与模型列表包含八个目录项，并声明图片输入', async () => {
+test('健康检查与模型列表包含九个目录项，并声明图片输入', async () => {
   await withServers(async (mock, proxy) => {
     const health = await fetch(`${proxy.baseUrl}/healthz`);
     assert.equal(health.status, 200);
@@ -248,19 +258,19 @@ test('健康检查与模型列表包含八个目录项，并声明图片输入',
   });
 });
 
-test('八个模型均请求 /responses，模型名和密钥按路由隔离', async () => {
+test('九个模型均请求 /responses，模型名和密钥按路由隔离', async () => {
   await withServers(async (mock, proxy) => {
     const gptHeaders = { authorization: 'Bearer chatgpt-login-token', 'chatgpt-account-id': 'acct-test' };
     for (const slug of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
       const result = await postJson(proxy.baseUrl, { model: slug, input: [{ type: 'input_text', text: 'hello' }] }, gptHeaders);
       assert.equal(result.status, 200);
     }
-    for (const slug of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-direct', 'deepseek-v4-pro-direct', 'ox-alpha']) {
+    for (const slug of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-direct', 'deepseek-v4-pro-direct', 'ox-alpha', 'muse-spark-1.2-contributor']) {
       const result = await postJson(proxy.baseUrl, { model: slug, input: 'hello' });
       assert.equal(result.status, 200);
     }
 
-    assert.deepEqual(mock.seen.map((request) => request.url), Array(8).fill('/responses'));
+    assert.deepEqual(mock.seen.map((request) => request.url), Array(9).fill('/responses'));
     assert.deepEqual(mock.seen.map((request) => request.body.model), [
       'gpt-5.6-sol',
       'gpt-5.6-terra',
@@ -270,6 +280,7 @@ test('八个模型均请求 /responses，模型名和密钥按路由隔离', asy
       'deepseek-v4-flash',
       'deepseek-v4-pro',
       'stealth/ox-alpha',
+      'muse-spark-1.2-contributor',
     ]);
     assert.deepEqual(mock.seen.slice(0, 3).map((request) => request.auth), Array(3).fill('Bearer chatgpt-login-token'));
     assert.deepEqual(mock.seen.slice(0, 3).map((request) => request.accountId), Array(3).fill('acct-test'));
@@ -279,7 +290,54 @@ test('八个模型均请求 /responses，模型名和密钥按路由隔离', asy
       'Bearer test-deep-key',
       'Bearer test-deep-key',
       'Bearer test-or-key',
+      'Bearer test-open-key',
     ]);
+  });
+});
+
+test('Muse 路由补齐工具 required，其他路由与原请求体保持不变', async () => {
+  await withServers(async (mock, proxy) => {
+    const tools = [
+      {
+        type: 'function',
+        name: 'tool_search',
+        parameters: {
+          type: 'object',
+          properties: { query: { type: 'string' }, limit: { type: 'integer' } },
+          required: ['query'],
+          additionalProperties: false,
+        },
+      },
+      {
+        type: 'function',
+        name: 'complete_tool',
+        parameters: {
+          type: 'object',
+          properties: { a: { type: 'string' }, b: { type: 'string' } },
+          required: ['a', 'b'],
+        },
+      },
+    ];
+    const museBody = {
+      model: 'muse-spark-1.2-contributor',
+      input: 'hello',
+      tools: JSON.parse(JSON.stringify(tools)),
+    };
+    const museResult = await postJson(proxy.baseUrl, museBody);
+    assert.equal(museResult.status, 200);
+    const museSeen = mock.seen[0];
+    assert.equal(museSeen.body.model, 'muse-spark-1.2-contributor');
+    assert.deepEqual(museSeen.body.tools[0].parameters.required, ['query', 'limit']);
+    assert.deepEqual(museSeen.body.tools[1].parameters.required, ['a', 'b']);
+    assert.deepEqual(museBody.tools[0].parameters.required, ['query']);
+
+    const dsResult = await postJson(proxy.baseUrl, {
+      model: 'deepseek-v4-flash',
+      input: 'hello',
+      tools: JSON.parse(JSON.stringify(tools)),
+    });
+    assert.equal(dsResult.status, 200);
+    assert.deepEqual(mock.seen[1].body.tools[0].parameters.required, ['query']);
   });
 });
 

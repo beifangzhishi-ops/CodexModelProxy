@@ -24,6 +24,53 @@ const DEFAULT_SECRETS_FILE = path.join(__dirname, 'proxy-secrets.env');
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 600000;
 
+const VALID_TOOL_SCHEMA_COMPAT = new Set(['muse']);
+
+export function isValidToolSchemaCompat(value) {
+  return VALID_TOOL_SCHEMA_COMPAT.has(value);
+}
+
+// Muse 原生透传工具定义时，Meta 上游要求 parameters.required 覆盖 properties 中的每个 key。
+// 只追加缺失的 key、保留原有顺序；返回新对象，不修改原请求体，也不影响其他路由。
+export function normalizeMuseToolSchema(body) {
+  if (!body || typeof body !== 'object' || !Array.isArray(body.tools)) {
+    return body;
+  }
+  let toolsChanged = false;
+  const tools = body.tools.map((tool) => {
+    if (!tool || typeof tool !== 'object' || !['function', 'custom'].includes(tool.type)) {
+      return tool;
+    }
+    const parameters = tool.parameters;
+    if (
+      !parameters ||
+      typeof parameters !== 'object' ||
+      typeof parameters.properties !== 'object' ||
+      parameters.properties === null
+    ) {
+      return tool;
+    }
+    const propertyKeys = Object.keys(parameters.properties);
+    const required = Array.isArray(parameters.required)
+      ? parameters.required.filter((key) => typeof key === 'string')
+      : [];
+    const requiredSet = new Set(required);
+    const missing = propertyKeys.filter((key) => !requiredSet.has(key));
+    if (missing.length === 0) {
+      return tool;
+    }
+    toolsChanged = true;
+    return {
+      ...tool,
+      parameters: {
+        ...parameters,
+        required: [...required, ...missing],
+      },
+    };
+  });
+  return toolsChanged ? { ...body, tools } : body;
+}
+
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
   'keep-alive',
@@ -116,6 +163,12 @@ export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT
       !isValidToolOutputFormat(route.tool_output_format)
     ) {
       throw new Error(`路由 ${slug} 的 tool_output_format 无效`);
+    }
+    if (
+      route.tool_schema_compat !== undefined &&
+      !isValidToolSchemaCompat(route.tool_schema_compat)
+    ) {
+      throw new Error(`路由 ${slug} 的 tool_schema_compat 无效`);
     }
   }
   if (
@@ -472,8 +525,10 @@ function forwardToUpstream(
     network: networkMode,
     body,
   });
+  const schemaCompatibleBody =
+    route.tool_schema_compat === 'muse' ? normalizeMuseToolSchema(body) : body;
   const normalization = normalizeResponsesBody(
-    body,
+    schemaCompatibleBody,
     route.reasoning_format || 'passthrough',
     route.tool_output_format || 'passthrough',
   );
