@@ -1,5 +1,9 @@
 # CodexModelProxy 项目规则
 
+## 禁止agent重启模型代理
+
+agent自行重启模型代理会导致任务终端。
+
 ## 更新与推送
 
 - 代码与文档更新默认提交并推送到 `origin/beta`，不直接推送到 `origin/master`。
