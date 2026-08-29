@@ -299,13 +299,20 @@ test('Muse 路由补齐工具 required，其他路由与原请求体保持不变
   await withServers(async (mock, proxy) => {
     const tools = [
       {
-        type: 'function',
-        name: 'tool_search',
+        type: 'tool_search',
         parameters: {
           type: 'object',
           properties: { query: { type: 'string' }, limit: { type: 'integer' } },
           required: ['query'],
           additionalProperties: false,
+        },
+      },
+      {
+        type: 'web_search',
+        parameters: {
+          type: 'object',
+          properties: { q: { type: 'string' }, region: { type: 'string' } },
+          required: [],
         },
       },
       {
@@ -328,7 +335,8 @@ test('Muse 路由补齐工具 required，其他路由与原请求体保持不变
     const museSeen = mock.seen[0];
     assert.equal(museSeen.body.model, 'muse-spark-1.2-contributor');
     assert.deepEqual(museSeen.body.tools[0].parameters.required, ['query', 'limit']);
-    assert.deepEqual(museSeen.body.tools[1].parameters.required, ['a', 'b']);
+    assert.deepEqual(museSeen.body.tools[1].parameters.required, ['q', 'region']);
+    assert.deepEqual(museSeen.body.tools[2].parameters.required, ['a', 'b']);
     assert.deepEqual(museBody.tools[0].parameters.required, ['query']);
 
     const dsResult = await postJson(proxy.baseUrl, {
@@ -339,6 +347,28 @@ test('Muse 路由补齐工具 required，其他路由与原请求体保持不变
     assert.equal(dsResult.status, 200);
     assert.deepEqual(mock.seen[1].body.tools[0].parameters.required, ['query']);
   });
+});
+
+test('路由 tool_schema_compat 只接受 muse', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proxy-config-'));
+  const file = path.join(dir, 'proxy-config.json');
+  fs.writeFileSync(file, JSON.stringify({
+    models: {
+      'bad-model': {
+        upstream_base_url: 'http://127.0.0.1:1',
+        upstream_model: 'bad-model',
+        auth_mode: 'api_key',
+        api_key_env: 'OPENCODE_API_KEY',
+        reasoning_format: 'passthrough',
+        tool_schema_compat: 'invalid',
+      },
+    },
+  }));
+  try {
+    assert.throws(() => loadConfig(file), /tool_schema_compat 无效/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('请求体除 model 外保持一致，JSON 响应状态、头和正文原样返回', async () => {

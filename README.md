@@ -32,7 +32,7 @@ Muse Spark 1.2 Contributor 仅作可选模型：需要 GO workspace 开启数据
 - 跨模型切换时同步整理网页搜索记录：GPT 路由只保留 `id` 以 `ws` 开头的 `web_search_call`，DS/Codex 风格的 `call_...` 搜索调用项从本次上游请求移除；助手消息中的搜索结论与引用不受影响。
 - OpenRouter 路由清空 reasoning 的 `encrypted_content`，并移除 OpenRouter 不接受的 `web_search_call`；普通消息、函数调用和工具结果不改名。
 - 每条路由可设置 `tool_output_format`：默认 `passthrough`；四条 OC/直连 DeepSeek 路由使用 `json_string`，将 `function_call_output` 与 `custom_tool_call_output` 中的非字符串 `output` 完整 `JSON.stringify` 为文本，字符串保持不变。GPT 与 Ox 使用 `passthrough`，数组中的图片、`call_id`、项目顺序均保留。
-- Muse 路由启用 `tool_schema_compat: muse`：Meta 上游要求 `parameters.required` 覆盖 `properties` 中每个 key，代理只对 function/custom 工具追加缺失 key、保留原有顺序；只影响本次上游请求，不修改原请求对象，也不影响其他路由。`search_content_types` 已被上游放行，不再处理。
+- Muse 路由启用 `tool_schema_compat: muse`：Meta 上游要求 `parameters.required` 覆盖 `properties` 中每个 key，代理对带 `parameters.properties` 的顶层工具（不限类型，含 Codex 的 `tool_search`/`web_search`）追加缺失 key、保留原有顺序；只影响本次上游请求，不修改原请求对象，也不影响其他路由。`search_content_types` 已被上游放行，不再处理。
 - 不解析或转换 SSE 事件；工具输出只按上述路由规则处理，不尝试恢复跨供应商私有状态。
 - 三个 GPT 路由把 Codex 的 ChatGPT 登录认证（`Authorization`）原样转发至 Backend API。
 - OC 与直连 DeepSeek 路由丢弃传入的 ChatGPT `Authorization`，分别注入 `OPENCODE_API_KEY` 与 `DEEPSEEK_API_KEY`。

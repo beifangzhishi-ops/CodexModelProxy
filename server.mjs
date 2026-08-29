@@ -31,14 +31,16 @@ export function isValidToolSchemaCompat(value) {
 }
 
 // Muse 原生透传工具定义时，Meta 上游要求 parameters.required 覆盖 properties 中的每个 key。
-// 只追加缺失的 key、保留原有顺序；返回新对象，不修改原请求体，也不影响其他路由。
+// Codex 的搜索工具类型是 tool_search / web_search（不是 function/custom），因此不按类型过滤，
+// 只要顶层工具带对象形式的 parameters.properties 就补齐。只追加缺失的 key、保留原有顺序；
+// 返回新对象，不修改原请求体，也不影响其他路由。
 export function normalizeMuseToolSchema(body) {
   if (!body || typeof body !== 'object' || !Array.isArray(body.tools)) {
     return body;
   }
   let toolsChanged = false;
   const tools = body.tools.map((tool) => {
-    if (!tool || typeof tool !== 'object' || !['function', 'custom'].includes(tool.type)) {
+    if (!tool || typeof tool !== 'object') {
       return tool;
     }
     const parameters = tool.parameters;
