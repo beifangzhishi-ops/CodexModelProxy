@@ -25,6 +25,7 @@ const MODEL_SLUGS = [
   'ox-alpha',
   'muse-spark-1.2-contributor',
   'glm-5.3',
+  'glm-5.3-flash',
 ];
 
 const silentLogger = { info() {}, error() {}, warn() {} };
@@ -132,6 +133,14 @@ function testRoutes(mockBaseUrl) {
       reasoning_format: 'passthrough',
       tool_output_format: 'passthrough',
     },
+    'glm-5.3-flash': {
+      upstream_base_url: mockBaseUrl,
+      upstream_model: 'glm-5.3-flash',
+      auth_mode: 'api_key',
+      api_key_env: 'ZAI_API_KEY',
+      reasoning_format: 'passthrough',
+      tool_output_format: 'passthrough',
+    },
   };
 }
 
@@ -140,6 +149,9 @@ function testCatalog() {
     models: MODEL_SLUGS.map((slug) => {
       if (slug === 'glm-5.3') {
         return { slug, display_name: slug, input_modalities: ['text'] };
+      }
+      if (slug === 'glm-5.3-flash') {
+        return { slug, display_name: slug, input_modalities: ['text', 'image'], supports_image_detail_original: true };
       }
       return {
         slug,
@@ -256,7 +268,7 @@ async function withServers(fn, {
   }
 }
 
-test('健康检查与模型列表包含十个目录项，GLM 仅声明文本输入', async () => {
+test('健康检查与模型列表包含十一个目录项，GLM-5.3 仅声明文本输入、Flash 支持图片', async () => {
   await withServers(async (mock, proxy) => {
     const health = await fetch(`${proxy.baseUrl}/healthz`);
     assert.equal(health.status, 200);
@@ -269,6 +281,9 @@ test('健康检查与模型列表包含十个目录项，GLM 仅声明文本输�
     assert.deepEqual(modelsJson.models.map((model) => model.slug), MODEL_SLUGS);
     const glm = modelsJson.models.find((model) => model.slug === 'glm-5.3');
     assert.deepEqual(glm.input_modalities, ['text']);
+    const glmFlash = modelsJson.models.find((model) => model.slug === 'glm-5.3-flash');
+    assert.deepEqual(glmFlash.input_modalities, ['text', 'image']);
+    assert.equal(glmFlash.supports_image_detail_original, true);
     const imageModels = modelsJson.models.filter((model) => model.slug !== 'glm-5.3');
     assert.ok(imageModels.every((model) => model.input_modalities.includes('image')));
     assert.ok(imageModels.every((model) => model.supports_image_detail_original === true));
@@ -276,19 +291,19 @@ test('健康检查与模型列表包含十个目录项，GLM 仅声明文本输�
   });
 });
 
-test('十个模型均请求 /responses，模型名和密钥按路由隔离', async () => {
+test('十一个模型均请求 /responses，模型名和密钥按路由隔离', async () => {
   await withServers(async (mock, proxy) => {
     const gptHeaders = { authorization: 'Bearer chatgpt-login-token', 'chatgpt-account-id': 'acct-test' };
     for (const slug of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
       const result = await postJson(proxy.baseUrl, { model: slug, input: [{ type: 'input_text', text: 'hello' }] }, gptHeaders);
       assert.equal(result.status, 200);
     }
-    for (const slug of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-direct', 'deepseek-v4-pro-direct', 'ox-alpha', 'muse-spark-1.2-contributor', 'glm-5.3']) {
+    for (const slug of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-direct', 'deepseek-v4-pro-direct', 'ox-alpha', 'muse-spark-1.2-contributor', 'glm-5.3', 'glm-5.3-flash']) {
       const result = await postJson(proxy.baseUrl, { model: slug, input: 'hello' });
       assert.equal(result.status, 200);
     }
 
-    assert.deepEqual(mock.seen.map((request) => request.url), Array(10).fill('/responses'));
+    assert.deepEqual(mock.seen.map((request) => request.url), Array(11).fill('/responses'));
     assert.deepEqual(mock.seen.map((request) => request.body.model), [
       'gpt-5.6-sol',
       'gpt-5.6-terra',
@@ -300,6 +315,7 @@ test('十个模型均请求 /responses，模型名和密钥按路由隔离', asy
       'stealth/ox-alpha',
       'muse-spark-1.2-contributor',
       'glm-5.3',
+      'glm-5.3-flash',
     ]);
     assert.deepEqual(mock.seen.slice(0, 3).map((request) => request.auth), Array(3).fill('Bearer chatgpt-login-token'));
     assert.deepEqual(mock.seen.slice(0, 3).map((request) => request.accountId), Array(3).fill('acct-test'));
@@ -310,6 +326,7 @@ test('十个模型均请求 /responses，模型名和密钥按路由隔离', asy
       'Bearer test-deep-key',
       'Bearer test-or-key',
       'Bearer test-open-key',
+      'Bearer test-zai-key',
       'Bearer test-zai-key',
     ]);
   });
@@ -429,7 +446,7 @@ test('Muse 桥接把 namespace/custom/web_search 展平为上游可接受的工�
   });
 });
 
-test('GLM 路由直通：reasoning、工具输出、工具定义与 SSE 均原样转发', async () => {
+test('GLM 路由直通：reasoning、工具输出、工具定义与 SSE 均原样转发（含 Flash）', async () => {
   await withServers(async (mock, proxy) => {
     const body = {
       model: 'glm-5.3',
@@ -460,6 +477,12 @@ test('GLM 路由直通：reasoning、工具输出、工具定义与 SSE 均原�
     assert.equal(sse.status, 200);
     assert.equal(sse.headers.get('x-upstream-marker'), 'sse-preserved');
     assert.equal(sse.text, 'data: {"type":"response.output_text.delta","delta":"hello"}\n\ndata: {"type":"response.completed"}\n\n');
+    const flashBody = { ...body, model: 'glm-5.3-flash' };
+    const flashResult = await postJson(proxy.baseUrl, flashBody);
+    assert.equal(flashResult.status, 200);
+    assert.equal(mock.seen[2].auth, 'Bearer test-zai-key');
+    assert.deepEqual(mock.seen[2].body, { ...flashBody, model: 'glm-5.3-flash' });
+    assert.equal(mock.seen[2].body.model, 'glm-5.3-flash');
   });
 });
 
@@ -642,6 +665,11 @@ test('生产配置的路由与统一模型目录严格对应', () => {
   assert.equal(config.models['glm-5.3'].upstream_model, 'glm-5.3');
   assert.equal(config.models['glm-5.3'].upstream_base_url, 'https://api.z.ai/api/v1');
   assert.equal(config.models['glm-5.3'].reasoning_format, 'passthrough');
+  assert.equal(config.models['glm-5.3-flash'].auth_mode, 'api_key');
+  assert.equal(config.models['glm-5.3-flash'].api_key_env, 'ZAI_API_KEY');
+  assert.equal(config.models['glm-5.3-flash'].upstream_model, 'glm-5.3-flash');
+  assert.equal(config.models['glm-5.3-flash'].upstream_base_url, 'https://api.z.ai/api/v1');
+  assert.equal(config.models['glm-5.3-flash'].reasoning_format, 'passthrough');
   for (const slug of [
     'deepseek-v4-flash',
     'deepseek-v4-pro',
@@ -650,7 +678,7 @@ test('生产配置的路由与统一模型目录严格对应', () => {
   ]) {
     assert.equal(config.models[slug].tool_output_format, 'json_string');
   }
-  for (const slug of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'ox-alpha', 'glm-5.3']) {
+  for (const slug of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'ox-alpha', 'glm-5.3', 'glm-5.3-flash']) {
     assert.equal(config.models[slug].tool_output_format, 'passthrough');
   }
   const glm = config.catalog.models.find((model) => model.slug === 'glm-5.3');
@@ -658,6 +686,12 @@ test('生产配置的路由与统一模型目录严格对应', () => {
   assert.equal(glm.default_reasoning_level, 'max');
   assert.equal(glm.apply_patch_tool_type, 'freeform');
   assert.equal(glm.context_window, 1048576);
+  const glmFlash = config.catalog.models.find((model) => model.slug === 'glm-5.3-flash');
+  assert.deepEqual(glmFlash.input_modalities, ['text', 'image']);
+  assert.equal(glmFlash.supports_image_detail_original, true);
+  assert.equal(glmFlash.default_reasoning_level, 'max');
+  assert.equal(glmFlash.apply_patch_tool_type, 'freeform');
+  assert.equal(glmFlash.context_window, 1048576);
 });
 
 test('密钥文件缺失时返回空对象', () => {

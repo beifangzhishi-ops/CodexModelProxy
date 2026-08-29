@@ -82,6 +82,14 @@
       "api_key_env": "ZAI_API_KEY",
       "reasoning_format": "passthrough",
       "tool_output_format": "passthrough"
+    },
+    "glm-5.3-flash": {
+      "upstream_base_url": "https://api.z.ai/api/v1",
+      "upstream_model": "glm-5.3-flash",
+      "auth_mode": "api_key",
+      "api_key_env": "ZAI_API_KEY",
+      "reasoning_format": "passthrough",
+      "tool_output_format": "passthrough"
     }
   }
 }
