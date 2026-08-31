@@ -58,14 +58,6 @@
       "reasoning_format": "deepseek_plaintext",
       "tool_output_format": "json_string"
     },
-    "ox-alpha": {
-      "upstream_base_url": "https://openrouter.ai/api/v1",
-      "upstream_model": "stealth/ox-alpha",
-      "auth_mode": "api_key",
-      "api_key_env": "OPENROUTER_API_KEY",
-      "reasoning_format": "openrouter_compatible",
-      "tool_output_format": "passthrough"
-    },
     "muse-spark-1.2-contributor": {
       "upstream_base_url": "https://opencode.ai/zen/go/v1",
       "upstream_model": "muse-spark-1.2-contributor",

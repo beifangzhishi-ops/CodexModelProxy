@@ -22,6 +22,7 @@ import {
 import { createHistoryMonitor } from './history-monitor.mjs';
 import { createWindowsSystemProxyResolver } from './system-proxy.mjs';
 import { createProxyAgent } from './proxy-agent.mjs';
+import { createCpaModelCatalog, loadCpaConfig } from './cpa-provider.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_FILE = path.join(__dirname, 'proxy-config.json');
@@ -87,6 +88,13 @@ const HOP_BY_HOP_HEADERS = new Set([
   'trailer',
   'transfer-encoding',
   'upgrade',
+]);
+const CPA_CLIENT_CREDENTIAL_HEADERS = new Set([
+  'chatgpt-account-id',
+  'cookie',
+  'openai-organization',
+  'openai-project',
+  'x-api-key',
 ]);
 
 export function parseDirectModels(raw, routes) {
@@ -240,6 +248,7 @@ export function createProxyServer({
   directModels: configuredDirectModels,
   historyMonitor: configuredHistoryMonitor,
   systemProxyResolver: configuredSystemProxyResolver,
+  cpaModelFetcher,
 }) {
   const routes = config.models || {};
   const catalogModels = Array.isArray(config.catalog?.models) ? config.catalog.models : null;
@@ -255,6 +264,12 @@ export function createProxyServer({
   });
   const requireToken = accessToken.length > 0;
   const historyMonitor = configuredHistoryMonitor || createHistoryMonitor({ env, logger });
+  const cpaConfig = loadCpaConfig(env, secrets);
+  const cpaCatalog = createCpaModelCatalog({
+    config: cpaConfig,
+    logger,
+    fetchModels: cpaModelFetcher,
+  });
 
   function isAuthorized(req) {
     if (!requireToken) return true;
@@ -278,15 +293,13 @@ export function createProxyServer({
     }
 
     if (req.method === 'GET' && pathname === '/v1/models') {
-      const data = Object.keys(routes).map((slug) => ({
-        id: slug,
-        object: 'model',
-        owned_by: 'unified',
-      }));
-      sendJson(res, 200, {
-        object: 'list',
-        models: catalogModels || data,
-        data,
+      void sendModelList(res, routes, catalogModels, cpaCatalog).catch((err) => {
+        logger.error(`[codex-proxy] 模型列表生成失败：${err.message}`);
+        if (!res.headersSent) {
+          sendJson(res, 500, {
+            error: { type: 'server_error', message: '模型列表生成失败' },
+          });
+        }
       });
       return;
     }
@@ -300,28 +313,31 @@ export function createProxyServer({
           return;
         }
         const model = body && typeof body.model === 'string' ? body.model : '';
-        const route = routes[model];
-        if (!route) {
-          logger.info(`[codex-proxy] POST /v1/responses model=${model || '(空)'} -> 未知模型 400`);
-          sendJson(res, 400, {
-            error: { type: 'invalid_request_error', message: `未知模型：${model}` },
+        const selection = resolveModelSelection(model, routes, cpaConfig);
+        if (!selection.ok) {
+          logger.info(`[codex-proxy] POST /v1/responses model=${model || '(空)'} -> ${selection.message} ${selection.status}`);
+          sendJson(res, selection.status, {
+            error: { type: selection.errorType, message: selection.message },
           });
           return;
         }
         try {
-          const proxy = await proxyForModel(model);
+          const proxy = selection.provider === 'cpa'
+            ? { url: '', mode: 'direct' }
+            : await proxyForModel(selection.routeSlug);
           forwardToUpstream(
             req,
             res,
             body,
             model,
-            route,
+            selection.route,
             secrets,
             logger,
             proxy.url,
             proxy.mode,
             env,
             historyMonitor,
+            selection.provider,
           );
         } catch (proxyError) {
           logger.error(`[codex-proxy] 系统代理解析失败 model=${model} err=${proxyError.message}`);
@@ -342,25 +358,30 @@ export function createProxyServer({
           return;
         }
         const model = body && typeof body.model === 'string' ? body.model : '';
-        const route = routes[model];
-        if (!route) {
-          logger.info(`[codex-proxy] POST /v1/responses/compact model=${model || '(空)'} -> 未知模型 400`);
-          sendJson(res, 400, {
-            error: { type: 'invalid_request_error', message: `未知模型：${model}` },
+        const selection = resolveModelSelection(model, routes, cpaConfig);
+        if (!selection.ok) {
+          logger.info(`[codex-proxy] POST /v1/responses/compact model=${model || '(空)'} -> ${selection.message} ${selection.status}`);
+          sendJson(res, selection.status, {
+            error: { type: selection.errorType, message: selection.message },
           });
           return;
         }
+        const isCpa = selection.provider === 'cpa';
         forwardCompactWithFallback({
           req,
           res,
           body,
           slug: model,
-          route,
-          fallbackSlug: compactFallbackSlug,
-          fallbackRoute: routes[compactFallbackSlug],
+          route: selection.route,
+          fallbackSlug: isCpa ? undefined : compactFallbackSlug,
+          fallbackRoute: isCpa ? undefined : { ...routes[compactFallbackSlug], provider: 'direct' },
           secrets,
           logger,
-          proxyForModel,
+          proxyForModel: isCpa
+            ? async () => ({ url: '', mode: 'direct' })
+            : async (attemptSlug) => proxyForModel(
+              attemptSlug === model ? selection.routeSlug : attemptSlug,
+            ),
           env,
           historyMonitor,
         });
@@ -512,6 +533,87 @@ function readJsonBody(req, callback) {
   req.on('error', (err) => finish(err));
 }
 
+export function resolveModelSelection(model, routes, cpaConfig) {
+  if (model.startsWith('cpa/')) {
+    const upstreamModel = model.slice('cpa/'.length);
+    if (!upstreamModel) {
+      return invalidModel(model);
+    }
+    if (!cpaConfig.enabled) {
+      return {
+        ok: false,
+        status: 503,
+        errorType: 'upstream_unavailable',
+        message: 'CPA 未配置：请同时设置 CPA_BASE_URL 与 CPA_API_KEY',
+      };
+    }
+    return {
+      ok: true,
+      provider: 'cpa',
+      routeSlug: model,
+      route: {
+        upstream_base_url: cpaConfig.baseUrl,
+        upstream_model: upstreamModel,
+        auth_mode: 'api_key',
+        api_key_env: 'CPA_API_KEY',
+        reasoning_format: 'passthrough',
+        tool_output_format: 'passthrough',
+        provider: 'cpa',
+      },
+    };
+  }
+
+  const explicitDirect = model.startsWith('direct/');
+  const routeSlug = explicitDirect ? model.slice('direct/'.length) : model;
+  const route = routes[routeSlug];
+  if (!route) return invalidModel(model);
+  return {
+    ok: true,
+    provider: 'direct',
+    routeSlug,
+    route: { ...route, provider: 'direct' },
+  };
+}
+
+function invalidModel(model) {
+  return {
+    ok: false,
+    status: 400,
+    errorType: 'invalid_request_error',
+    message: `未知模型：${model}`,
+  };
+}
+
+async function sendModelList(res, routes, catalogModels, cpaCatalog) {
+  const cpaModels = await cpaCatalog.getModels();
+  const directData = Object.keys(routes).flatMap((slug) => [
+    { id: slug, object: 'model', owned_by: 'unified' },
+    { id: `direct/${slug}`, object: 'model', owned_by: 'unified' },
+  ]);
+  const baseCatalog = catalogModels || Object.keys(routes).map((slug) => ({
+    slug,
+    display_name: slug,
+  }));
+  const directCatalog = baseCatalog.flatMap((model) => [
+    model,
+    {
+      ...model,
+      slug: `direct/${model.slug}`,
+      display_name: `Direct · ${model.display_name || model.slug}`,
+    },
+  ]);
+  const cpaCatalogModels = cpaModels.map((model) => ({
+    slug: model.id,
+    display_name: `CPA · ${model.id.slice('cpa/'.length)}`,
+    description: 'CLIProxyAPI 动态模型',
+  }));
+  sendJson(res, 200, {
+    object: 'list',
+    models: [...directCatalog, ...cpaCatalogModels],
+    data: [...directData, ...cpaModels],
+  });
+}
+
 function relayRestoredMuseJson(res, upRes, status, headers, museContext, logger, slug) {
   const chunks = [];
   let bytes = 0;
@@ -572,7 +674,9 @@ function forwardToUpstream(
   networkMode,
   env,
   historyMonitor,
+  provider = 'direct',
 ) {
+  const startedAt = Date.now();
   let museContext = null;
   let upstreamSourceBody = body;
   if (route.tool_schema_compat === 'muse') {
@@ -706,6 +810,7 @@ function forwardToUpstream(
       lower === 'authorization' ||
       lower === 'x-proxy-access-token' ||
       lower === 'content-length' ||
+      (provider === 'cpa' && CPA_CLIENT_CREDENTIAL_HEADERS.has(lower)) ||
       HOP_BY_HOP_HEADERS.has(lower)
     ) {
       continue;
@@ -742,11 +847,11 @@ function forwardToUpstream(
       upRes.on('end', () => {
         const raw = Buffer.concat(errChunks).toString('utf8');
         logger.error(
-          `[codex-proxy] 上游诊断 model=${slug} network=${networkMode} status=${status} bytes=${Buffer.byteLength(upstreamBody)} ${extractUpstreamErrorDetail(raw)} 输入[${formatCounts(requestSummary.inputTypes)}] 工具[${formatCounts(requestSummary.toolLabels)}] 孤立调用=${requestSummary.missingOutputs} 孤立输出=${requestSummary.missingCalls}`,
+          `[codex-proxy] 上游诊断 provider=${provider} model=${slug} network=${networkMode} status=${status} duration_ms=${Date.now() - startedAt} bytes=${Buffer.byteLength(upstreamBody)} ${extractUpstreamErrorDetail(raw)} 输入[${formatCounts(requestSummary.inputTypes)}] 工具[${formatCounts(requestSummary.toolLabels)}] 孤立调用=${requestSummary.missingOutputs} 孤立输出=${requestSummary.missingCalls}`,
         );
       });
     } else {
-      logger.info(`[codex-proxy] POST /v1/responses model=${slug} network=${networkMode} -> ${upstreamUrl.host} status=${status}`);
+      logger.info(`[codex-proxy] POST /v1/responses provider=${provider} model=${slug} network=${networkMode} -> ${upstreamUrl.host} status=${status} duration_ms=${Date.now() - startedAt}`);
     }
     if (museContext && status >= 200 && status < 300) {
       const contentType = String(outHeaders['content-type'] || '').toLowerCase();
@@ -775,7 +880,7 @@ function forwardToUpstream(
     } else {
       res.destroy();
     }
-    logger.error(`[codex-proxy] 上游错误 model=${slug} network=${networkMode} -> ${upstreamUrl.host} err=${err.message}`);
+    logger.error(`[codex-proxy] 上游错误 provider=${provider} model=${slug} network=${networkMode} -> ${upstreamUrl.host} duration_ms=${Date.now() - startedAt} err=${err.message}`);
   });
   res.on('close', () => outgoing.destroy());
   outgoing.end(upstreamBody);
@@ -801,9 +906,11 @@ if (isMain()) {
   const env = process.env;
   let config;
   let secrets;
+  let cpaConfig;
   try {
     config = loadConfig();
     secrets = loadSecrets();
+    cpaConfig = loadCpaConfig(env, secrets);
   } catch (err) {
     console.error(`[codex-proxy] 启动失败：${err.message}`);
     process.exit(1);
@@ -839,6 +946,11 @@ if (isMain()) {
     writePidFile(pidFile, process.pid);
     console.log(`[codex-proxy] 已启动：http://${host}:${port}`);
     console.log(`[codex-proxy] 模型路由：${Object.keys(config.models).join('、')}`);
+    console.log(
+      cpaConfig.enabled
+        ? `[codex-proxy] CPA：已启用，地址=${new URL(cpaConfig.baseUrl).host}，模型缓存=${cpaConfig.cacheTtlMs / 1000} 秒`
+        : '[codex-proxy] CPA：未启用',
+    );
     const configuredProxy = env.PROXY_URL !== undefined
       ? String(env.PROXY_URL).trim()
       : String(config.proxy || '').trim();

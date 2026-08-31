@@ -16,6 +16,13 @@ const HOP_BY_HOP_HEADERS = new Set([
   'transfer-encoding',
   'upgrade',
 ]);
+const CPA_CLIENT_CREDENTIAL_HEADERS = new Set([
+  'chatgpt-account-id',
+  'cookie',
+  'openai-organization',
+  'openai-project',
+  'x-api-key',
+]);
 
 export async function forwardCompactWithFallback({
   req,
@@ -50,6 +57,7 @@ export async function forwardCompactWithFallback({
   res.once('close', onClientClose);
 
   const attempt = async (attemptSlug, attemptRoute, selectedProxy) => {
+    const startedAt = Date.now();
     const currentAttempt = ++attemptNumber;
     const attemptProxy = selectedProxy || await selectProxy(attemptSlug);
     const attemptProxyUrl = attemptProxy.url;
@@ -134,7 +142,13 @@ export async function forwardCompactWithFallback({
         error: result.error || (result.status >= 400 ? new Error(`HTTP ${result.status}`) : null),
       });
     }
-    return { ...result, proxyUrl: attemptProxyUrl, networkMode: attemptProxy.mode };
+    return {
+      ...result,
+      provider: attemptRoute.provider || 'direct',
+      proxyUrl: attemptProxyUrl,
+      networkMode: attemptProxy.mode,
+      durationMs: Date.now() - startedAt,
+    };
   };
 
   try {
@@ -248,7 +262,7 @@ function requestBufferedCompact({ req, body, slug, route, secrets, proxyUrl, env
     const lib = upstreamUrl.protocol === 'https:' ? https : http;
     const agent = upstreamUrl.protocol === 'https:' && proxyUrl ? createProxyAgent(proxyUrl) : undefined;
     const upstreamBody = JSON.stringify({ ...body, model: route.upstream_model });
-    const headers = copyRequestHeaders(req.headers);
+    const headers = copyRequestHeaders(req.headers, route.provider || 'direct');
     headers.authorization = upstreamAuthorization;
     headers['content-length'] = Buffer.byteLength(upstreamBody);
     if (!headers['content-type']) headers['content-type'] = 'application/json';
@@ -295,7 +309,7 @@ function requestBufferedCompact({ req, body, slug, route, secrets, proxyUrl, env
   });
 }
 
-function copyRequestHeaders(sourceHeaders) {
+function copyRequestHeaders(sourceHeaders, provider) {
   const headers = {};
   for (const [key, value] of Object.entries(sourceHeaders)) {
     const lower = key.toLowerCase();
@@ -304,6 +318,7 @@ function copyRequestHeaders(sourceHeaders) {
       lower === 'authorization' ||
       lower === 'x-proxy-access-token' ||
       lower === 'content-length' ||
+      (provider === 'cpa' && CPA_CLIENT_CREDENTIAL_HEADERS.has(lower)) ||
       HOP_BY_HOP_HEADERS.has(lower)
     ) {
       continue;
@@ -323,14 +338,16 @@ function isSuccessful(result) {
 
 function logAttempt(logger, slug, result) {
   const networkMode = result.networkMode || (result.proxyUrl ? 'fixed-proxy' : 'direct');
+  const provider = result.provider || 'direct';
+  const durationMs = result.durationMs ?? 0;
   if (result.error) {
     logger.error(
-      `[codex-proxy] POST /v1/responses/compact model=${slug} network=${networkMode} -> ${result.upstreamHost} err=${result.error.message}`,
+      `[codex-proxy] POST /v1/responses/compact provider=${provider} model=${slug} network=${networkMode} -> ${result.upstreamHost} duration_ms=${durationMs} err=${result.error.message}`,
     );
     return;
   }
   logger.info(
-    `[codex-proxy] POST /v1/responses/compact model=${slug} network=${networkMode} -> ${result.upstreamHost} status=${result.status}`,
+    `[codex-proxy] POST /v1/responses/compact provider=${provider} model=${slug} network=${networkMode} -> ${result.upstreamHost} status=${result.status} duration_ms=${durationMs}`,
   );
 }
 

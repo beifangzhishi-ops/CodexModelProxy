@@ -1,6 +1,6 @@
-# CodexModelProxy 十一模型纯 Responses 中转（Windows）
+# CodexModelProxy 多模型纯 Responses 中转（Windows）
 
-本目录是一个零依赖的 Node.js 本地中转服务，让 Codex 通过一个本地地址同时使用 11 个上游模型（ChatGPT × 3、OpenCode × 3、DeepSeek × 2、OpenRouter × 1、Z.AI × 2）。所有上游统一走 `/responses` 协议；代理替换模型名、处理鉴权，并在发送前按目标模型整理 reasoning、网页搜索历史和指定的工具输出格式，其余请求与响应原样转发。
+本目录是一个零依赖的 Node.js 本地中转服务，让 Codex 通过一个本地地址同时使用 10 个静态模型（ChatGPT × 3、OpenCode × 3、DeepSeek × 2、Z.AI × 2），并可选接入独立部署的 CLIProxyAPI（下称 CPA）动态模型。所有上游统一走 `/responses` 协议；代理替换模型名、处理鉴权，并在发送前按目标模型整理 reasoning、网页搜索历史和指定的工具输出格式，其余请求与响应原样转发。
 
 项目只面向 Windows 本机使用，通过 Git 仓库在多个机器间同步更新：通用配置提交到仓库，密钥与本机差异（监听端口、访问令牌等）放在各自机器上、不提交。上游默认动态使用当前用户的 Windows 手动系统代理，无需在项目中重复填写 FlClash 端口。
 
@@ -17,12 +17,11 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 | `deepseek-v4-pro` | OC · DSV4 Pro | `OPENCODE_API_KEY` | OpenCode GO `deepseek-v4-pro` |
 | `deepseek-v4-flash-direct` | DS · V4 Flash · 直连 | `DEEPSEEK_API_KEY` | DeepSeek `deepseek-v4-flash` |
 | `deepseek-v4-pro-direct` | DS · V4 Pro · 直连 | `DEEPSEEK_API_KEY` | DeepSeek `deepseek-v4-pro` |
-| `ox-alpha` | OR · Ox Alpha | `OPENROUTER_API_KEY` | OpenRouter `stealth/ox-alpha` |
 | `muse-spark-1.2-contributor` | OC · Muse Spark 1.2 Contributor | `OPENCODE_API_KEY` | OpenCode GO `muse-spark-1.2-contributor` |
 | `glm-5.3` | ZAI · GLM-5.3 | `ZAI_API_KEY` | Z.AI `glm-5.3` |
 | `glm-5.3-flash` | ZAI · GLM-5.3-Flash | `ZAI_API_KEY` | Z.AI `glm-5.3-flash` |
 
-默认模型为 `deepseek-v4-flash`（OC · DSV4 Flash）。Ox Alpha 是 OpenRouter 上的匿名预览模型，当前免费提供；`gpt-5.4-mini`、`gpt-5.4-nano`、Gemini、MiMo 均不进入目录。
+默认模型为 `deepseek-v4-flash`（OC · DSV4 Flash）。CPA 模型不写入静态 `models_unified.json`，而是从 CPA `/models` 动态同步并在代理的 `/v1/models` 中以 `cpa/` 前缀展示。
 
 Muse Spark 1.2 Contributor 仅作可选模型：需要 GO workspace 开启数据训练授权，且本机代理出口在美国；思考档位支持 `minimal/low/medium/high/xhigh`，默认 `high`；支持图片输入。压缩失败时沿用 `deepseek-v4-flash` 后备。
 
@@ -32,30 +31,30 @@ GLM-5.3 / GLM-5.3-Flash 使用 Z.AI 的 GLM Coding Plan 专用 Responses 端点�
 
 - 只处理 `POST /v1/responses`、`POST /v1/responses/compact` 与 `GET /v1/models`；所有路由固定追加 `/responses`。
 - 请求体除 `model` 替换为实际上游模型名外，还会按目标模型的 reasoning 格式整理推理历史；JSON 与 SSE 响应状态、响应头和正文原样返回。
-- 跨 GPT/DeepSeek 切换时保留所有项目及顺序，只整理冲突字段：GPT 路由把输入项 `id` 中连续非法字符替换为 `_`，并按项目类型补齐所需前缀（message `msg_`、reasoning `rs_`、function call `fc_`、custom tool call `ctc_` 及其输出前缀）；错误前缀前会添加正确前缀并保留完整原 ID，避免来源不同的项目发生碰撞。GPT 路由还会把 reasoning 的非空或格式不兼容 `content` 改为 `[]`；若发现 OC/DS 使用的“UUID + 分段号”外部引用误放在 `encrypted_content`，仅将该字段改为 `null`，正常 GPT 密文继续保留。OpenCode、直连 DeepSeek 与 OpenRouter 路由把已有的 `encrypted_content` 改为 `null`，保留明文 `content`。整理只影响本次上游请求，不修改 Codex 原会话，也不修改工具配对使用的 `call_id`。
+- 跨 GPT/DeepSeek 切换时保留所有项目及顺序，只整理冲突字段：GPT 路由把输入项 `id` 中连续非法字符替换为 `_`，并按项目类型补齐所需前缀（message `msg_`、reasoning `rs_`、function call `fc_`、custom tool call `ctc_` 及其输出前缀）；错误前缀前会添加正确前缀并保留完整原 ID，避免来源不同的项目发生碰撞。GPT 路由还会把 reasoning 的非空或格式不兼容 `content` 改为 `[]`；若发现 OC/DS 使用的“UUID + 分段号”外部引用误放在 `encrypted_content`，仅将该字段改为 `null`，正常 GPT 密文继续保留。OpenCode 与直连 DeepSeek 路由把已有的 `encrypted_content` 改为 `null`，保留明文 `content`。整理只影响本次上游请求，不修改 Codex 原会话，也不修改工具配对使用的 `call_id`。
 - 跨模型切换时同步整理网页搜索记录：GPT 路由只保留 `id` 以 `ws` 开头的 `web_search_call`，DS/Codex 风格的 `call_...` 搜索调用项从本次上游请求移除；助手消息中的搜索结论与引用不受影响。
-- OpenRouter 路由清空 reasoning 的 `encrypted_content`，并移除 OpenRouter 不接受的 `web_search_call`；普通消息、函数调用和工具结果不改名。
 - Z.AI 的 `glm-5.3` / `glm-5.3-flash` 路由使用 `reasoning_format: passthrough` 与 `tool_output_format: passthrough`：reasoning、`web_search_call`、工具输出、工具定义和请求正文完全原样转发，不做任何改写；若上游出现历史格式兼容错误，再按实际错误增加适配。
-- 每条路由可设置 `tool_output_format`：默认 `passthrough`；四条 OC/直连 DeepSeek 路由使用 `json_string`，将 `function_call_output` 与 `custom_tool_call_output` 中的非字符串 `output` 完整 `JSON.stringify` 为文本，字符串保持不变。GPT、Ox 与 GLM 使用 `passthrough`，数组中的图片、`call_id`、项目顺序均保留。
+- 每条静态路由可设置 `tool_output_format`：默认 `passthrough`；四条 OC/直连 DeepSeek 路由使用 `json_string`，将 `function_call_output` 与 `custom_tool_call_output` 中的非字符串 `output` 完整 `JSON.stringify` 为文本，字符串保持不变。GPT 与 GLM 使用 `passthrough`，数组中的图片、`call_id`、项目顺序均保留；CPA 请求整体使用 `passthrough`。
 - Muse 路由启用 `tool_schema_compat: muse` 做完整双向工具桥接：发送前把 `namespace` 子工具展平为 `<namespace>__<name>` 普通函数、把 `custom` 桥接为带必填 `input` 字符串参数的函数、把客户端执行的 `tool_search` 桥接为普通函数，普通 `web_search` 删除上游不接受的 `search_content_types`，并补齐所有函数 schema 的 `required`；工具名超过 64 字符或冲突时用截断前缀加短摘要的别名。返回 Codex 前按同一请求级映射把 JSON/SSE 中的函数调用恢复为 namespace/custom/tool_search 原生形态。映射按请求独立，只影响本次请求，不影响其他路由。
 - 除 Muse 路由的调用恢复外，不解析或转换 SSE 事件；工具输出只按上述路由规则处理，不尝试恢复跨供应商私有状态。
 - 三个 GPT 路由把 Codex 的 ChatGPT 登录认证（`Authorization`）原样转发至 Backend API。
 - OC 与直连 DeepSeek 路由丢弃传入的 ChatGPT `Authorization`，分别注入 `OPENCODE_API_KEY` 与 `DEEPSEEK_API_KEY`；ZAI 路由同样丢弃传入认证并注入 `ZAI_API_KEY`。
-- 未知模型、缺少登录认证、缺少上游密钥时不访问上游，直接返回错误。
-- 日志只记录模型与上游主机，不记录提示词、响应正文、请求头与 API 密钥。
+- CPA 路由丢弃调用方的 `Authorization`、ChatGPT 账号头、Cookie 与 API Key 头，只注入服务端 `CPA_API_KEY`。
+- 未知静态模型、缺少登录认证、缺少上游密钥时不访问上游，直接返回错误；任意非空 `cpa/<模型>` 都交给 CPA 最终判断，不依赖模型缓存命中。
+- 日志记录 provider、模型、上游主机、状态码与耗时，不记录提示词、响应正文、请求头与 API 密钥。
 - 上游返回 4xx/5xx 时，代理额外写一条脱敏诊断日志：提取错误 `message`/`code`/provider 原始消息，统计请求输入类型、工具类型和孤立调用数；不记录提示词、工具参数或密钥。
 - 历史监控默认关闭；设置 `HISTORY_MONITOR=1` 后，按请求关联 ID 记录清洗前结构、清洗后结构和上游结果三类 JSONL 事件。监控只记录项目索引、类型、ID、字段存在性/长度、工具输出类型/字节数、调用配对统计和处理动作，不记录消息正文、reasoning 正文、密文、工具参数、工具输出、Base64、请求头或密钥。
 
 ## 图片上传
 
-`models_unified.json` 中除 `glm-5.3` 外的 10 个模型均声明 `input_modalities` 包含 `image` 且 `supports_image_detail_original: true`，因此桌面端允许上传图片；能否真正识别图片取决于上游模型是否支持图片输入。`glm-5.3` 按官方能力仅声明 `["text"]`，`glm-5.3-flash` 原生支持 `["text","image"]`。若某个上游不接受图片，把对应条目的 `input_modalities` 改回 `["text"]` 即可。
+`models_unified.json` 中除 `glm-5.3` 外的 9 个模型均声明 `input_modalities` 包含 `image` 且 `supports_image_detail_original: true`，因此桌面端允许上传图片；能否真正识别图片取决于上游模型是否支持图片输入。`glm-5.3` 按官方能力仅声明 `["text"]`，`glm-5.3-flash` 原生支持 `["text","image"]`。若某个上游不接受图片，把对应条目的 `input_modalities` 改回 `["text"]` 即可。
 
 ## 快速开始（每台机器各执行一次）
 
 1. 安装 Node.js（本项目只用内置模块，无需安装任何依赖）。
 2. 把仓库克隆到本机任意目录。
-3. 复制 `proxy-secrets.env.example` 为 `proxy-secrets.env`，填写 `OPENCODE_API_KEY`、`DEEPSEEK_API_KEY`、`OPENROUTER_API_KEY` 与 `ZAI_API_KEY`。该文件已被 Git 忽略，不会提交，各机器填各自的密钥。
-4. 复制 `proxy-local.env.example` 为 `proxy-local.env`；默认不设置 `PROXY_URL`，未列入 `DIRECT_MODELS` 的模型会动态使用当前用户的 Windows 手动系统代理。启用本地访问令牌时在此文件加 `PROXY_ACCESS_TOKEN=...`；排查历史兼容问题时可临时加 `HISTORY_MONITOR=1`。
+3. 复制 `proxy-secrets.env.example` 为 `proxy-secrets.env`，填写 `OPENCODE_API_KEY`、`DEEPSEEK_API_KEY` 与 `ZAI_API_KEY`；启用 CPA 时再填写 `CPA_API_KEY`。该文件已被 Git 忽略，不会提交，各机器填各自的密钥。
+4. 复制 `proxy-local.env.example` 为 `proxy-local.env`；默认不设置 `PROXY_URL`，未列入 `DIRECT_MODELS` 的静态模型会动态使用当前用户的 Windows 手动系统代理。启用 CPA 时设置 `CPA_BASE_URL`，启用本地访问令牌时设置 `PROXY_ACCESS_TOKEN`；排查历史兼容问题时可临时加 `HISTORY_MONITOR=1`。
 5. 双击或运行 `start-proxy.cmd` 启动中转。浏览器打开 `http://127.0.0.1:8787/healthz`，应返回 `{"status":"ok"}`。
 6. 按下方“Codex 配置”准备三处文件并运行切换脚本。
 7. 重新加载 Codex 配置与模型目录（模型目录缓存到 App Server 重启后刷新）。
@@ -63,6 +62,32 @@ GLM-5.3 / GLM-5.3-Flash 使用 Z.AI 的 GLM Coding Plan 专用 Responses 端点�
 以后更新：先执行 `git pull` 拉取最新代码，然后提醒用户手动重启中转（先运行 `stop-proxy.cmd`，再运行 `start-proxy.cmd`）；更新过程中不要自动重启服务，重启时机由用户决定。
 
 > 注意：代理本身就是 Codex 正在使用的通信通道。如果当前 Codex 正通过本中转（`base_url` 指向本代理），停止或重启代理前，请先切换到直连配置，操作完成后再切回统一中转。
+
+## CLIProxyAPI（CPA）
+
+CPA 必须作为独立服务部署，CodexModelProxy 只连接它，不负责启动、停止、账号池管理或升级。配置示例：
+
+`proxy-local.env`：
+
+```text
+CPA_BASE_URL=http://127.0.0.1:8317/v1
+CPA_MODELS_CACHE_TTL_SECONDS=60
+```
+
+`proxy-secrets.env`：
+
+```text
+CPA_API_KEY=你的_CLIProxyAPI_服务端密钥
+```
+
+- `CPA_BASE_URL` 与 `CPA_API_KEY` 都不设置时，CPA 功能关闭；只设置其中一个时，服务拒绝启动并指出缺失项。
+- `CPA_BASE_URL` 是包含 `/v1` 的 OpenAI 兼容根地址。CPA 连接不经过本项目的 `PROXY_URL` 或 Windows 系统代理。
+- `CPA_MODELS_CACHE_TTL_SECONDS` 必须是正整数，默认 60 秒。
+- `cpa/<模型>` 剥离前缀后发往 CPA；`direct/<模型>` 剥离前缀后走现有静态路由；无前缀模型仍走现有静态路由。
+- `/v1/models` 同时返回无前缀静态模型、`direct/` 静态别名和 CPA 动态模型。CPA 模型刷新失败时继续返回最近一次成功缓存；从未成功时只返回静态模型。
+- 任意非空 `cpa/<模型>` 都允许转发，由 CPA 判断模型是否存在。CPA 返回限流、额度不足、4xx、5xx 或网络错误时直接返回调用方，不切换到静态路由。
+- CPA 的 `/responses/compact` 失败时也不使用本项目的静态压缩后备模型。
+- CPA 请求使用 `CPA_API_KEY`，不会向 CPA 传递调用方的 ChatGPT 账号头、Cookie、`Authorization` 或 `X-Api-Key`。
 
 ## 分支与更新流程
 
@@ -75,8 +100,8 @@ GLM-5.3 / GLM-5.3-Flash 使用 Z.AI 的 GLM Coding Plan 专用 Responses 端点�
 
 统一配置涉及三处文件：仓库内的 `proxy-secrets.env` 与 `proxy-local.env` 保存本机差异，`C:\Users\noha\.codex\config_unified.toml` 是 Codex 的备用统一配置模板。
 
-1. `proxy-secrets.env`：填写 `OPENCODE_API_KEY`、`DEEPSEEK_API_KEY`、`OPENROUTER_API_KEY` 与 `ZAI_API_KEY`，两个 OC 路由、两个直连 DeepSeek 路由、Ox Alpha 路由和 ZAI 路由分别使用它们。
-2. `proxy-local.env`：设置本机 `DIRECT_MODELS`、`HOST`、`PORT`；通常无需设置 `PROXY_URL`，只有固定代理或强制默认直连时才使用它。启用本地访问令牌时加 `PROXY_ACCESS_TOKEN=...`，其值必须与下方 `http_headers` 中的一致；历史排查开关见下方“可选历史监控”。
+1. `proxy-secrets.env`：填写 `OPENCODE_API_KEY`、`DEEPSEEK_API_KEY` 与 `ZAI_API_KEY`；启用 CPA 时取消 `CPA_API_KEY` 示例行的注释并填写密钥。
+2. `proxy-local.env`：设置本机 `DIRECT_MODELS`、`HOST`、`PORT`；通常无需设置 `PROXY_URL`，只有固定代理或强制默认直连时才使用它。启用 CPA 时设置 `CPA_BASE_URL` 和可选缓存时间；启用本地访问令牌时加 `PROXY_ACCESS_TOKEN=...`，其值必须与下方 `http_headers` 中的一致；历史排查开关见下方“可选历史监控”。
 3. `config_unified.toml`（位于 `%USERPROFILE%\.codex`）：
 
 ```toml
@@ -109,7 +134,7 @@ http_headers = { "X-Proxy-Access-Token" = "你的访问令牌" }
 2. 运行 `C:\Users\noha\.codex\config_unified.cmd`（个人目录的切换脚本，不在本仓库内）。
 3. 脚本只把模板中的模型、认证和 `[model_providers.OpenAI]` 区段写入活动 `config.toml`，桌面端、插件、MCP、项目权限等其他配置保留。
 4. 重启 Codex App Server 或重新加载配置，让启动时加载的模型目录刷新。
-5. 下拉列表应正好显示 11 个模型，默认模型为 `deepseek-v4-flash`。
+5. 静态下拉列表应正好显示 10 个模型，默认模型为 `deepseek-v4-flash`；CPA 动态模型通过代理 `/v1/models` 查询或用 `cpa/<模型>` 显式指定。
 
 只修改 `config_unified.toml` 不会影响当前 Codex 配置；运行 `config_unified.cmd` 才会把模板写入活动 `config.toml`。切换失败时脚本不会替换当前 `config.toml`。
 
@@ -128,7 +153,8 @@ CLI 单独指定模型（不改全局配置）：
 codex exec -m gpt-5.6-sol "提示词"
 codex exec -m deepseek-v4-flash "提示词"
 codex exec -m deepseek-v4-flash-direct "提示词"
-codex exec -m ox-alpha "提示词"
+codex exec -m direct/gpt-5.6-sol "提示词"
+codex exec -m cpa/gpt-5.6-sol "提示词"
 codex exec -m glm-5.3 "提示词"
 codex exec -m glm-5.3-flash "提示词"
 ```
@@ -138,18 +164,19 @@ codex exec -m glm-5.3-flash "提示词"
 | 文件 | 作用 |
 |---|---|
 | `server.mjs` | 中转服务主程序，零依赖 |
+| `cpa-provider.mjs` | CPA 配置校验、动态模型同步、并发刷新合并与失败缓存 |
 | `compact-forward.mjs` | `/responses/compact` 转发与失败后备模型重试 |
 | `system-proxy.mjs` | Windows 当前用户手动系统代理读取、规范化、2 秒缓存与并发刷新合并 |
 | `proxy-agent.mjs` | 经 HTTP 或 HTTPS 代理建立上游 CONNECT 隧道 |
 | `muse-tool-compat.mjs` | Muse 请求级双向工具桥接：namespace/custom/tool_search 展平、web_search 字段清理、名称别名与 JSON/SSE 调用恢复 |
-| `proxy-config.json` | 通用配置：监听地址、端口、压缩后备模型与 11 条模型路由；每条路由声明 `reasoning_format` 与 `tool_output_format`，Muse 路由额外声明 `tool_schema_compat`（提交到仓库） |
+| `proxy-config.json` | 通用配置：监听地址、端口、压缩后备模型与 10 条静态模型路由；每条路由声明 `reasoning_format` 与 `tool_output_format`，Muse 路由额外声明 `tool_schema_compat`（提交到仓库） |
 | `history-normalize.mjs` | 按目标模型整理 reasoning、`web_search_call` 与工具输出历史（发送前处理，不修改原会话） |
 | `history-monitor.mjs` | 可选的脱敏历史结构监控、关联 ID、调用配对统计和日志轮换 |
 | `proxy-secrets.env.example` | 密钥模板；复制为 `proxy-secrets.env` 填写，后者不提交 |
 | `proxy-local.env.example` | 本机差异模板；复制为 `proxy-local.env` 填写，后者不提交 |
-| `models_unified.json` | Codex 统一模型目录（11 个模型） |
+| `models_unified.json` | Codex 静态统一模型目录（10 个模型） |
 | `config-templates/` | Codex 配置切换脚本示例（脱敏模板，复制到 `%USERPROFILE%\.codex` 后按本机修改） |
-| `test/proxy.test.mjs`、`test/compact-fallback.test.mjs`、`test/system-proxy.test.mjs`、`test/history-normalize.test.mjs`、`test/history-monitor.test.mjs`、`test/muse-tool-compat.test.mjs` | 自动测试（模拟注册表、临时目录与内存 mock 上游，不消耗真实额度） |
+| `test/proxy.test.mjs`、`test/cpa-provider.test.mjs`、`test/compact-fallback.test.mjs`、`test/system-proxy.test.mjs`、`test/history-normalize.test.mjs`、`test/history-monitor.test.mjs`、`test/muse-tool-compat.test.mjs` | 自动测试（模拟注册表、临时目录与内存 mock 上游，不消耗真实额度） |
 
 ## 上游网络路径
 
@@ -159,7 +186,7 @@ Codex 始终先访问本地中转 `127.0.0.1:8787`；本节配置的是本地中
 DIRECT_MODELS=deepseek-v4-flash,deepseek-v4-pro,deepseek-v4-flash-direct,deepseek-v4-pro-direct
 ```
 
-当前默认路径为：GPT 三个模型、Ox Alpha、Muse 与 GLM-5.3 / GLM-5.3-Flash 跟随 Windows 系统代理，OC 两个模型和 DeepSeek 两个直连模型绕过代理。Muse 需要美区出口，不要把它加入 `DIRECT_MODELS`。将模型 slug 加入或移出 `DIRECT_MODELS` 后，重启本地中转即可生效，不需要修改 Codex 配置或刷新模型目录。白名单中的 slug 必须是 `proxy-config.json` 中已有的模型。
+当前默认路径为：GPT 三个模型、Muse 与 GLM-5.3 / GLM-5.3-Flash 跟随 Windows 系统代理，OC 两个模型和 DeepSeek 两个直连模型绕过代理。Muse 需要美区出口，不要把它加入 `DIRECT_MODELS`。CPA 使用显式 `CPA_BASE_URL` 并直接连接，不参与 `DIRECT_MODELS`、`PROXY_URL` 或 Windows 系统代理选择。将静态模型 slug 加入或移出 `DIRECT_MODELS` 后，重启本地中转即可生效，不需要修改 Codex 配置或刷新模型目录。白名单中的 slug 必须是 `proxy-config.json` 中已有的模型。
 
 代理选择优先级如下：
 
@@ -186,23 +213,20 @@ HISTORY_MONITOR_FILE=history-monitor.jsonl
 ## 测试
 
 ```text
-node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fallback.test.mjs test\history-monitor.test.mjs test\system-proxy.test.mjs test\muse-tool-compat.test.mjs
+node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fallback.test.mjs test\history-monitor.test.mjs test\system-proxy.test.mjs test\muse-tool-compat.test.mjs test\cpa-provider.test.mjs
 ```
 
-测试覆盖健康检查、模型列表、11 条路由、模型名与密钥隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、未知模型拦截，GPT/DeepSeek/OpenRouter reasoning 字段整理、Muse 跨类型输入项 ID 规范化、`web_search_call` 过滤、畸形推理项保留、四条 DS 路由工具输出 JSON 文本化、Muse 工具展平/名称别名/JSON/SSE 调用恢复与原请求不可变、ZAI 直通保真、图片数组与调用配对保留，以及 Windows 系统代理格式、优先级、动态刷新、失败后备和历史监控。
+测试覆盖健康检查、静态与 CPA 动态模型列表、10 条静态路由、`direct/` 与 `cpa/` 前缀、CPA 配置三态、模型缓存与失败保留、模型名与密钥隔离、CPA/直通并发隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、CPA 不跨源后备、未知模型拦截，GPT/DeepSeek reasoning 字段整理、Muse 跨类型输入项 ID 规范化、`web_search_call` 过滤、畸形推理项保留、四条 DS 路由工具输出 JSON 文本化、Muse 工具展平/名称别名/JSON/SSE 调用恢复与原请求不可变、ZAI 直通保真、图片数组与调用配对保留，以及 Windows 系统代理格式、优先级、动态刷新、失败后备和历史监控。
 
 ## 已知限制
 
 - OpenCode GO 的 `/responses` 兼容层返回字段较精简，标准多轮工具调用历史仍可能不被完整接受；四条 OC/直连 DeepSeek 路由只把非字符串工具输出序列化为 JSON 文本，不做其他工具协议转换或缓存。
-- OpenRouter 上的 Ox Alpha 是匿名预览模型，免费资格、可用性和上游策略可能变化；当前使用 `stealth/ox-alpha`，并通过 `OPENROUTER_API_KEY` 认证。
-- Ox Alpha 路由使用 `reasoning_format: openrouter_compatible`：跨供应商切换时把 `encrypted_content` 置为 `null`，并删除 `web_search_call`，不尝试恢复原供应商的私有思考状态。
-- OpenRouter/Stealth 上游不接受 Codex 的 freeform custom 工具（`apply_patch`），因此 Ox Alpha 目录中 `apply_patch_tool_type` 置为 `null`，该模型改用 `exec_command` 完成文件操作；不把 custom 转成 function，以免客户端执行路径与上游协议错位。
 - Muse Spark 1.2 Contributor 的 GO Responses 端点只接受普通 function 工具与去除了 `search_content_types` 的 `web_search`，并限制函数名不超过 64 字符；代理已按请求做完整双向桥接（namespace/custom/tool_search 展平与恢复）。依据为 GitHub codex-router PR #288/#482 与 opencodex issue #2442。思考档位仅 `minimal~xhigh`（`none`/`max` 返回 400）；需要数据训练授权与美区出口；流式以 `response.completed` 结束且不发 `[DONE]`，若 Codex 客户端出现收尾异常需单独评估。若 GO 后续原生支持这些工具，可移除 `tool_schema_compat` 恢复纯透传。
 - Z.AI GLM-5.3 / GLM-5.3-Flash 首版为完整直通：reasoning、工具输出与工具定义不做改写；若上游拒绝 Codex 的某些历史格式，需按实际错误增加适配。官方未公开 `/responses/compact` 的支持情况，压缩失败时沿用 `deepseek-v4-flash` 后备。GLM-5.3 仅声明文本输入，GLM-5.3-Flash 声明图文输入。
 - DeepSeek 直连的 `/responses` 兼容性取决于上游实现；代理不降级到 Chat Completions。
-- 历史整理只解决已知的 GPT/DeepSeek/OpenRouter 历史格式兼容，不解决真正的上下文 token 超限；净化后若上游仍返回上下文长度错误，需要压缩或裁剪会话。
+- 历史整理只解决已知的 GPT/DeepSeek 历史格式兼容，不解决真正的上下文 token 超限；净化后若上游仍返回上下文长度错误，需要压缩或裁剪会话。
 - 模型目录在 Codex App Server 启动时加载，改动后需重启 App Server 才会刷新下拉列表。
-- 除 GLM-5.3 外的 10 个目录项允许附加图片，但实际模型不能原生识图时仍会按上游能力报错。
+- 除 GLM-5.3 外的 9 个静态目录项允许附加图片，但实际模型不能原生识图时仍会按上游能力报错。
 
 ## 故障排查
 

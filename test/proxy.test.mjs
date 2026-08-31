@@ -22,7 +22,6 @@ const MODEL_SLUGS = [
   'deepseek-v4-pro',
   'deepseek-v4-flash-direct',
   'deepseek-v4-pro-direct',
-  'ox-alpha',
   'muse-spark-1.2-contributor',
   'glm-5.3',
   'glm-5.3-flash',
@@ -108,14 +107,6 @@ function testRoutes(mockBaseUrl) {
       reasoning_format: 'deepseek_plaintext',
       tool_output_format: 'json_string',
     },
-    'ox-alpha': {
-      upstream_base_url: mockBaseUrl,
-      upstream_model: 'stealth/ox-alpha',
-      auth_mode: 'api_key',
-      api_key_env: 'OPENROUTER_API_KEY',
-      reasoning_format: 'openrouter_compatible',
-      tool_output_format: 'passthrough',
-    },
     'muse-spark-1.2-contributor': {
       upstream_base_url: mockBaseUrl,
       upstream_model: 'muse-spark-1.2-contributor',
@@ -167,7 +158,6 @@ function testSecrets() {
   return {
     OPENCODE_API_KEY: 'test-open-key',
     DEEPSEEK_API_KEY: 'test-deep-key',
-    OPENROUTER_API_KEY: 'test-or-key',
     ZAI_API_KEY: 'test-zai-key',
   };
 }
@@ -185,9 +175,22 @@ function startMockUpstream() {
         auth: req.headers.authorization || '',
         proxyAccessToken: req.headers['x-proxy-access-token'] || '',
         accountId: req.headers['chatgpt-account-id'] || '',
+        cookie: req.headers.cookie || '',
+        xApiKey: req.headers['x-api-key'] || '',
         body,
         rawBody,
       });
+      if (req.method === 'GET' && req.url === '/models') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          object: 'list',
+          data: [
+            { id: 'gpt-cpa-one', object: 'model', owned_by: 'cli-proxy-api' },
+            { id: 'claude-cpa-two', object: 'model', owned_by: 'cli-proxy-api' },
+          ],
+        }));
+        return;
+      }
       if (body.trigger_error) {
         res.writeHead(503, { 'content-type': 'application/json', 'x-upstream-marker': 'error-preserved' });
         res.end('{"error":{"type":"upstream_test_error","message":"preserve me"}}');
@@ -223,8 +226,16 @@ function startProxy(
   env = {},
   logger = silentLogger,
   systemProxyResolver = async () => ({ url: '', mode: 'direct' }),
+  cpaModelFetcher,
 ) {
-  const server = createProxyServer({ config, secrets, logger, env, systemProxyResolver });
+  const server = createProxyServer({
+    config,
+    secrets,
+    logger,
+    env,
+    systemProxyResolver,
+    cpaModelFetcher,
+  });
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
       resolve({ server, baseUrl: `http://127.0.0.1:${server.address().port}` });
@@ -234,6 +245,15 @@ function startProxy(
 
 async function postJson(baseUrl, body, headers = {}) {
   const res = await fetch(`${baseUrl}/v1/responses`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, headers: res.headers, text: await res.text() };
+}
+
+async function postCompact(baseUrl, body, headers = {}) {
+  const res = await fetch(`${baseUrl}/v1/responses/compact`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body),
@@ -252,14 +272,20 @@ async function withServers(fn, {
   env = {},
   logger = silentLogger,
   systemProxyResolver,
+  cpaModelFetcher,
 } = {}) {
   const mock = await startMockUpstream();
+  const proxyEnv = {
+    ...env,
+    ...(env.CPA_BASE_URL === '__MOCK_BASE_URL__' ? { CPA_BASE_URL: mock.baseUrl } : {}),
+  };
   const proxy = await startProxy(
     { host: '127.0.0.1', port: 0, models: testRoutes(mock.baseUrl), catalog: testCatalog() },
     secrets,
-    env,
+    proxyEnv,
     logger,
     systemProxyResolver,
+    cpaModelFetcher,
   );
   try {
     await fn(mock, proxy, logger);
@@ -268,7 +294,7 @@ async function withServers(fn, {
   }
 }
 
-test('健康检查与模型列表包含十一个目录项，GLM-5.3 仅声明文本输入、Flash 支持图片', async () => {
+test('健康检查与模型列表包含无前缀及 direct/ 目录项，GLM-5.3 能力保持不变', async () => {
   await withServers(async (mock, proxy) => {
     const health = await fetch(`${proxy.baseUrl}/healthz`);
     assert.equal(health.status, 200);
@@ -277,33 +303,36 @@ test('健康检查与模型列表包含十一个目录项，GLM-5.3 仅声明文
     const modelsRes = await fetch(`${proxy.baseUrl}/v1/models`);
     assert.equal(modelsRes.status, 200);
     const modelsJson = await modelsRes.json();
-    assert.deepEqual(modelsJson.data.map((model) => model.id), MODEL_SLUGS);
-    assert.deepEqual(modelsJson.models.map((model) => model.slug), MODEL_SLUGS);
+    const expectedSlugs = MODEL_SLUGS.flatMap((slug) => [slug, `direct/${slug}`]);
+    assert.deepEqual(modelsJson.data.map((model) => model.id), expectedSlugs);
+    assert.deepEqual(modelsJson.models.map((model) => model.slug), expectedSlugs);
     const glm = modelsJson.models.find((model) => model.slug === 'glm-5.3');
     assert.deepEqual(glm.input_modalities, ['text']);
     const glmFlash = modelsJson.models.find((model) => model.slug === 'glm-5.3-flash');
     assert.deepEqual(glmFlash.input_modalities, ['text', 'image']);
     assert.equal(glmFlash.supports_image_detail_original, true);
-    const imageModels = modelsJson.models.filter((model) => model.slug !== 'glm-5.3');
+    const imageModels = modelsJson.models.filter(
+      (model) => model.slug !== 'glm-5.3' && model.slug !== 'direct/glm-5.3',
+    );
     assert.ok(imageModels.every((model) => model.input_modalities.includes('image')));
     assert.ok(imageModels.every((model) => model.supports_image_detail_original === true));
     assert.equal(mock.seen.length, 0);
   });
 });
 
-test('十一个模型均请求 /responses，模型名和密钥按路由隔离', async () => {
+test('十个静态模型均请求 /responses，模型名和密钥按路由隔离', async () => {
   await withServers(async (mock, proxy) => {
     const gptHeaders = { authorization: 'Bearer chatgpt-login-token', 'chatgpt-account-id': 'acct-test' };
     for (const slug of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
       const result = await postJson(proxy.baseUrl, { model: slug, input: [{ type: 'input_text', text: 'hello' }] }, gptHeaders);
       assert.equal(result.status, 200);
     }
-    for (const slug of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-direct', 'deepseek-v4-pro-direct', 'ox-alpha', 'muse-spark-1.2-contributor', 'glm-5.3', 'glm-5.3-flash']) {
+    for (const slug of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-direct', 'deepseek-v4-pro-direct', 'muse-spark-1.2-contributor', 'glm-5.3', 'glm-5.3-flash']) {
       const result = await postJson(proxy.baseUrl, { model: slug, input: 'hello' });
       assert.equal(result.status, 200);
     }
 
-    assert.deepEqual(mock.seen.map((request) => request.url), Array(11).fill('/responses'));
+    assert.deepEqual(mock.seen.map((request) => request.url), Array(10).fill('/responses'));
     assert.deepEqual(mock.seen.map((request) => request.body.model), [
       'gpt-5.6-sol',
       'gpt-5.6-terra',
@@ -312,7 +341,6 @@ test('十一个模型均请求 /responses，模型名和密钥按路由隔离', 
       'deepseek-v4-pro',
       'deepseek-v4-flash',
       'deepseek-v4-pro',
-      'stealth/ox-alpha',
       'muse-spark-1.2-contributor',
       'glm-5.3',
       'glm-5.3-flash',
@@ -324,11 +352,165 @@ test('十一个模型均请求 /responses，模型名和密钥按路由隔离', 
       'Bearer test-open-key',
       'Bearer test-deep-key',
       'Bearer test-deep-key',
-      'Bearer test-or-key',
       'Bearer test-open-key',
       'Bearer test-zai-key',
       'Bearer test-zai-key',
     ]);
+  });
+});
+
+test('direct/ 前缀剥离后复用原静态路由，无前缀行为保持不变', async () => {
+  await withServers(async (mock, proxy) => {
+    const auth = { authorization: 'Bearer chatgpt-login-token' };
+    const prefixed = await postJson(proxy.baseUrl, { model: 'direct/gpt-5.6-sol', input: 'hello' }, auth);
+    const legacy = await postJson(proxy.baseUrl, { model: 'gpt-5.6-sol', input: 'hello' }, auth);
+    const deepseek = await postJson(proxy.baseUrl, { model: 'direct/deepseek-v4-flash', input: 'hello' });
+    assert.equal(prefixed.status, 200);
+    assert.equal(legacy.status, 200);
+    assert.equal(deepseek.status, 200);
+    assert.deepEqual(mock.seen.map((request) => request.body.model), [
+      'gpt-5.6-sol',
+      'gpt-5.6-sol',
+      'deepseek-v4-flash',
+    ]);
+  });
+});
+
+test('CPA 动态模型进入模型列表并使用独立服务端认证', async () => {
+  await withServers(async (mock, proxy) => {
+    const listResponse = await fetch(`${proxy.baseUrl}/v1/models`);
+    assert.equal(listResponse.status, 200);
+    const list = await listResponse.json();
+    assert.ok(list.data.some((model) => model.id === 'cpa/gpt-cpa-one'));
+    assert.ok(list.data.some((model) => model.id === 'cpa/claude-cpa-two'));
+    assert.ok(list.models.some((model) => model.slug === 'cpa/gpt-cpa-one'));
+    assert.equal(mock.seen[0].url, '/models');
+    assert.equal(mock.seen[0].auth, 'Bearer cpa-service-key');
+
+    const result = await postJson(
+      proxy.baseUrl,
+      { model: 'cpa/gpt-cpa-one', input: 'hello' },
+      {
+        authorization: 'Bearer caller-token',
+        'chatgpt-account-id': 'caller-account',
+        cookie: 'session=caller-cookie',
+        'x-api-key': 'caller-api-key',
+      },
+    );
+    assert.equal(result.status, 200);
+    assert.equal(mock.seen[1].url, '/responses');
+    assert.equal(mock.seen[1].body.model, 'gpt-cpa-one');
+    assert.equal(mock.seen[1].auth, 'Bearer cpa-service-key');
+    assert.equal(mock.seen[1].accountId, '');
+    assert.equal(mock.seen[1].cookie, '');
+    assert.equal(mock.seen[1].xApiKey, '');
+  }, {
+    secrets: { ...testSecrets(), CPA_API_KEY: 'cpa-service-key' },
+    env: { CPA_BASE_URL: '__MOCK_BASE_URL__' },
+  });
+});
+
+test('CPA 未配置时返回 503，未知 CPA 模型在启用后仍交给上游判断', async () => {
+  await withServers(async (mock, proxy) => {
+    const disabled = await postJson(proxy.baseUrl, { model: 'cpa/any-model', input: 'hello' });
+    assert.equal(disabled.status, 503);
+    assert.match(disabled.text, /CPA 未配置/);
+    assert.equal(mock.seen.length, 0);
+  });
+
+  await withServers(async (mock, proxy) => {
+    const enabled = await postJson(proxy.baseUrl, { model: 'cpa/not-in-model-cache', input: 'hello' });
+    assert.equal(enabled.status, 200);
+    assert.equal(mock.seen.length, 1);
+    assert.equal(mock.seen[0].body.model, 'not-in-model-cache');
+  }, {
+    secrets: { ...testSecrets(), CPA_API_KEY: 'cpa-service-key' },
+    env: { CPA_BASE_URL: '__MOCK_BASE_URL__' },
+  });
+});
+
+test('CPA 保持 SSE 与错误响应，不切换到静态直通路由', async () => {
+  const logs = [];
+  const logger = {
+    info: (message) => logs.push(message),
+    error: (message) => logs.push(message),
+    warn: (message) => logs.push(message),
+  };
+  await withServers(async (mock, proxy) => {
+    const stream = await postJson(proxy.baseUrl, {
+      model: 'cpa/gpt-cpa-one',
+      stream: true,
+      input: 'hello',
+    });
+    assert.equal(stream.status, 200);
+    assert.equal(stream.headers.get('x-upstream-marker'), 'sse-preserved');
+    assert.match(stream.text, /response\.completed/);
+
+    const failed = await postJson(proxy.baseUrl, {
+      model: 'cpa/gpt-cpa-one',
+      trigger_error: true,
+    });
+    assert.equal(failed.status, 503);
+    assert.equal(failed.headers.get('x-upstream-marker'), 'error-preserved');
+    assert.equal(mock.seen.length, 2);
+    assert.ok(logs.some((message) => message.includes('provider=cpa model=cpa/gpt-cpa-one')));
+  }, {
+    secrets: { ...testSecrets(), CPA_API_KEY: 'cpa-service-key' },
+    env: { CPA_BASE_URL: '__MOCK_BASE_URL__' },
+    logger,
+  });
+});
+
+test('CPA compact 请求失败时不使用静态后备模型', async () => {
+  await withServers(async (mock, proxy) => {
+    const result = await postCompact(proxy.baseUrl, {
+      model: 'cpa/gpt-cpa-one',
+      trigger_error: true,
+    }, {
+      authorization: 'Bearer caller-token',
+      'chatgpt-account-id': 'caller-account',
+      cookie: 'session=caller-cookie',
+      'x-api-key': 'caller-api-key',
+    });
+    assert.equal(result.status, 503);
+    assert.equal(mock.seen.length, 1);
+    assert.equal(mock.seen[0].url, '/responses/compact');
+    assert.equal(mock.seen[0].body.model, 'gpt-cpa-one');
+    assert.equal(mock.seen[0].auth, 'Bearer cpa-service-key');
+    assert.equal(mock.seen[0].accountId, '');
+    assert.equal(mock.seen[0].cookie, '');
+    assert.equal(mock.seen[0].xApiKey, '');
+  }, {
+    secrets: { ...testSecrets(), CPA_API_KEY: 'cpa-service-key' },
+    env: { CPA_BASE_URL: '__MOCK_BASE_URL__' },
+  });
+});
+
+test('CPA 与订阅直通并发请求的模型、认证和账号头互不污染', async () => {
+  await withServers(async (mock, proxy) => {
+    const [directResult, cpaResult] = await Promise.all([
+      postJson(
+        proxy.baseUrl,
+        { model: 'direct/gpt-5.6-sol', input: 'direct' },
+        { authorization: 'Bearer chatgpt-token', 'chatgpt-account-id': 'chatgpt-account' },
+      ),
+      postJson(
+        proxy.baseUrl,
+        { model: 'cpa/gpt-cpa-one', input: 'cpa' },
+        { authorization: 'Bearer caller-token', 'chatgpt-account-id': 'caller-account' },
+      ),
+    ]);
+    assert.equal(directResult.status, 200);
+    assert.equal(cpaResult.status, 200);
+    const directRequest = mock.seen.find((request) => request.body.model === 'gpt-5.6-sol');
+    const cpaRequest = mock.seen.find((request) => request.body.model === 'gpt-cpa-one');
+    assert.equal(directRequest.auth, 'Bearer chatgpt-token');
+    assert.equal(directRequest.accountId, 'chatgpt-account');
+    assert.equal(cpaRequest.auth, 'Bearer cpa-service-key');
+    assert.equal(cpaRequest.accountId, '');
+  }, {
+    secrets: { ...testSecrets(), CPA_API_KEY: 'cpa-service-key' },
+    env: { CPA_BASE_URL: '__MOCK_BASE_URL__' },
   });
 });
 
@@ -613,11 +795,11 @@ test('普通请求按 DIRECT_MODELS 选择代理或直连', async () => {
       );
       await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input: 'hello' });
       await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash-direct', input: 'hello' });
-      await postJson(proxy.baseUrl, { model: 'ox-alpha', input: 'hello' });
+      await postJson(proxy.baseUrl, { model: 'muse-spark-1.2-contributor', input: 'hello' });
       assert.ok(logs.some((message) => message.includes('model=gpt-5.6-sol network=fixed-proxy')));
       assert.ok(logs.some((message) => message.includes('model=deepseek-v4-flash network=direct')));
       assert.ok(logs.some((message) => message.includes('model=deepseek-v4-flash-direct network=direct')));
-      assert.ok(logs.some((message) => message.includes('model=ox-alpha network=fixed-proxy')));
+      assert.ok(logs.some((message) => message.includes('model=muse-spark-1.2-contributor network=fixed-proxy')));
       assert.equal(mock.seen.length, 4);
     },
     {
@@ -638,6 +820,9 @@ test('缺少 ChatGPT 登录认证、缺少静态密钥和未知模型均不访�
     const unknown = await postJson(proxy.baseUrl, { model: 'unknown-model', input: 'hello' });
     assert.equal(unknown.status, 400);
     assert.match(unknown.text, /未知模型/);
+    const removedOx = await postJson(proxy.baseUrl, { model: 'ox-alpha', input: 'hello' });
+    assert.equal(removedOx.status, 400);
+    assert.match(removedOx.text, /未知模型：ox-alpha/);
     assert.equal(mock.seen.length, 0);
   }, { secrets: {} });
 });
@@ -657,9 +842,6 @@ test('生产配置的路由与统一模型目录严格对应', () => {
   assert.deepEqual(config.catalog.models.map((model) => model.slug), MODEL_SLUGS);
   assert.equal(config.models['deepseek-v4-flash'].auth_mode, 'api_key');
   assert.equal(config.models['gpt-5.6-sol'].auth_mode, 'openai_passthrough');
-  assert.equal(config.models['ox-alpha'].upstream_model, 'stealth/ox-alpha');
-  assert.equal(config.models['ox-alpha'].api_key_env, 'OPENROUTER_API_KEY');
-  assert.equal(config.models['ox-alpha'].reasoning_format, 'openrouter_compatible');
   assert.equal(config.models['glm-5.3'].auth_mode, 'api_key');
   assert.equal(config.models['glm-5.3'].api_key_env, 'ZAI_API_KEY');
   assert.equal(config.models['glm-5.3'].upstream_model, 'glm-5.3');
@@ -678,7 +860,7 @@ test('生产配置的路由与统一模型目录严格对应', () => {
   ]) {
     assert.equal(config.models[slug].tool_output_format, 'json_string');
   }
-  for (const slug of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'ox-alpha', 'glm-5.3', 'glm-5.3-flash']) {
+  for (const slug of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'glm-5.3', 'glm-5.3-flash']) {
     assert.equal(config.models[slug].tool_output_format, 'passthrough');
   }
   const glm = config.catalog.models.find((model) => model.slug === 'glm-5.3');
@@ -1028,7 +1210,7 @@ test('四条 OC/直连 DS 路由完整序列化数组、对象和标量工具输
   });
 });
 
-test('GPT 与 Ox 路由对工具输出保持原始数组和对象', async () => {
+test('GPT 路由对工具输出保持原始数组和对象', async () => {
   const imageOutput = [{ type: 'image', data: 'base64-image-fixture' }];
   const objectOutput = { ok: true, value: 3 };
   const input = [
@@ -1041,9 +1223,7 @@ test('GPT 与 Ox 路由对工具输出保持原始数组和对象', async () => 
       { model: 'gpt-5.6-sol', input },
       { authorization: 'Bearer chatgpt-login-token' },
     );
-    await postJson(proxy.baseUrl, { model: 'ox-alpha', input });
     assert.deepEqual(mock.seen[0].body.input, input);
-    assert.deepEqual(mock.seen[1].body.input, input);
   });
 });
 
