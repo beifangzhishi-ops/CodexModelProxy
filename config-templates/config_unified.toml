@@ -2,7 +2,6 @@ model_provider = "OpenAI"
 model = "deepseek-v4-flash"
 model_reasoning_effort = "max"
 forced_login_method = "chatgpt"
-model_catalog_json = "C:/你的克隆目录/CodexModelProxy/models_unified.json"
 
 [model_providers.OpenAI]
 name = "unified"

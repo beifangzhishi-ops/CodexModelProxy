@@ -31,6 +31,16 @@ const MAX_BODY_BYTES = 64 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 600000;
 
 const VALID_TOOL_SCHEMA_COMPAT = new Set(['muse']);
+const DEFAULT_CPA_TEMPLATE_SLUG = 'gpt-5.6-luna';
+const CPA_MODEL_TEMPLATE_SLUGS = new Map([
+  ['codex-auto-review', 'gpt-5.6-sol'],
+  ['gpt-5.3-codex-spark', 'gpt-5.6-luna'],
+  ['gpt-5.4', 'gpt-5.6-terra'],
+  ['gpt-5.4-mini', 'gpt-5.6-luna'],
+  ['gpt-5.5', 'gpt-5.6-terra'],
+  ['gpt-image-1.5', 'glm-5.3-flash'],
+  ['gpt-image-2', 'glm-5.3-flash'],
+]);
 
 export function isValidToolSchemaCompat(value) {
   return VALID_TOOL_SCHEMA_COMPAT.has(value);
@@ -603,16 +613,89 @@ async function sendModelList(res, routes, catalogModels, cpaCatalog) {
       display_name: `Direct · ${model.display_name || model.slug}`,
     },
   ]);
-  const cpaCatalogModels = cpaModels.map((model) => ({
-    slug: model.id,
-    display_name: `CPA · ${model.id.slice('cpa/'.length)}`,
-    description: 'CLIProxyAPI 动态模型',
-  }));
+  const cpaCatalogModels = buildCpaCatalogModels(cpaModels, baseCatalog, directCatalog.length);
   sendJson(res, 200, {
     object: 'list',
     models: [...directCatalog, ...cpaCatalogModels],
     data: [...directData, ...cpaModels],
   });
+}
+
+export function buildCpaCatalogModels(cpaModels, baseCatalog, priorityStart = 0) {
+  const templates = new Map(
+    (Array.isArray(baseCatalog) ? baseCatalog : [])
+      .filter((model) => model && typeof model.slug === 'string')
+      .map((model) => [model.slug, model]),
+  );
+  const defaultTemplate = templates.get(DEFAULT_CPA_TEMPLATE_SLUG)
+    || templates.values().next().value
+    || {};
+
+  return (Array.isArray(cpaModels) ? cpaModels : []).map((model, index) => {
+    const upstreamSlug = model.id.slice('cpa/'.length);
+    const templateSlug = templates.has(upstreamSlug)
+      ? upstreamSlug
+      : CPA_MODEL_TEMPLATE_SLUGS.get(upstreamSlug);
+    const template = templates.get(templateSlug) || defaultTemplate;
+    return {
+      ...defaultCpaModelInfo(priorityStart + index + 1),
+      ...template,
+      slug: model.id,
+      display_name: `CPA · ${upstreamSlug}`,
+      description: `CLIProxyAPI 动态模型 · ${upstreamSlug}`,
+      priority: priorityStart + index + 1,
+      additional_speed_tiers: [],
+      service_tiers: [],
+      default_service_tier: null,
+      availability_nux: null,
+      upgrade: null,
+    };
+  });
+}
+
+function defaultCpaModelInfo(priority) {
+  return {
+    slug: '',
+    display_name: '',
+    description: null,
+    default_reasoning_level: 'medium',
+    supported_reasoning_levels: [
+      { effort: 'low', description: 'Fast responses with lighter reasoning' },
+      { effort: 'medium', description: 'Balances speed and reasoning depth' },
+      { effort: 'high', description: 'Greater reasoning depth for complex problems' },
+    ],
+    shell_type: 'shell_command',
+    visibility: 'list',
+    supported_in_api: true,
+    priority,
+    additional_speed_tiers: [],
+    service_tiers: [],
+    default_service_tier: null,
+    availability_nux: null,
+    upgrade: null,
+    model_messages: null,
+    include_skills_usage_instructions: false,
+    include_plugin_usage_instructions: false,
+    include_apps_usage_instructions: true,
+    supports_reasoning_summary_parameter: true,
+    default_reasoning_summary: 'none',
+    support_verbosity: true,
+    default_verbosity: 'low',
+    apply_patch_tool_type: 'freeform',
+    web_search_tool_type: 'text_and_image',
+    truncation_policy: { mode: 'tokens', limit: 10000 },
+    supports_parallel_tool_calls: true,
+    supports_image_detail_original: true,
+    context_window: 128000,
+    max_context_window: 128000,
+    effective_context_window_percent: 95,
+    experimental_supported_tools: [],
+    input_modalities: ['text', 'image'],
+    supports_search_tool: true,
+    use_responses_lite: true,
+    tool_mode: 'code_mode_only',
+    multi_agent_version: 'v2',
+  };
 }
 
 function relayRestoredMuseJson(res, upRes, status, headers, museContext, logger, slug) {

@@ -6,7 +6,7 @@
 
 ## 模型映射
 
-Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表按 `display_name` 展示，因此第三方模型不再需要伪装成 `gpt-5.x` 别名。OpenCode 与直连 DeepSeek 的上游模型名相同，用 `-direct` 后缀区分直连通道。
+Codex App Server 从当前 Provider 的 `/models` 动态读取完整模型目录，下拉列表按 `display_name` 展示，因此第三方模型不需要伪装成 `gpt-5.x` 别名。OpenCode 与直连 DeepSeek 的上游模型名相同，用 `-direct` 后缀区分直连通道。
 
 | slug（请求与配置用） | 显示名（下拉列表可见） | 认证 | 实际上游 |
 |---|---|---|---|
@@ -21,7 +21,7 @@ Codex 的模型目录（`model_catalog_json`）支持任意 slug，下拉列表�
 | `glm-5.3` | ZAI · GLM-5.3 | `ZAI_API_KEY` | Z.AI `glm-5.3` |
 | `glm-5.3-flash` | ZAI · GLM-5.3-Flash | `ZAI_API_KEY` | Z.AI `glm-5.3-flash` |
 
-默认模型为 `deepseek-v4-flash`（OC · DSV4 Flash）。CPA 模型不写入静态 `models_unified.json`，而是从 CPA `/models` 动态同步并在代理的 `/v1/models` 中以 `cpa/` 前缀展示。
+默认模型为 `deepseek-v4-flash`（OC · DSV4 Flash）。CMP 从 CPA `/models` 动态同步模型，在自己的 `/v1/models` 中补成完整 Codex 模型元数据并加上 `cpa/` 前缀；Codex App Server 再从 CMP 动态取得原模型、`direct/` 别名和 CPA 模型。
 
 Muse Spark 1.2 Contributor 仅作可选模型：需要 GO workspace 开启数据训练授权，且本机代理出口在美国；思考档位支持 `minimal/low/medium/high/xhigh`，默认 `high`；支持图片输入。压缩失败时沿用 `deepseek-v4-flash` 后备。
 
@@ -47,7 +47,7 @@ GLM-5.3 / GLM-5.3-Flash 使用 Z.AI 的 GLM Coding Plan 专用 Responses 端点�
 
 ## 图片上传
 
-`models_unified.json` 中除 `glm-5.3` 外的 9 个模型均声明 `input_modalities` 包含 `image` 且 `supports_image_detail_original: true`，因此桌面端允许上传图片；能否真正识别图片取决于上游模型是否支持图片输入。`glm-5.3` 按官方能力仅声明 `["text"]`，`glm-5.3-flash` 原生支持 `["text","image"]`。若某个上游不接受图片，把对应条目的 `input_modalities` 改回 `["text"]` 即可。
+CMP 返回的 Codex 模型元数据中，除 `glm-5.3` 外的基础模型、`direct/` 别名和 CPA 模型均声明支持图片附件；能否真正识别图片取决于实际上游能力。`glm-5.3` 按官方能力仅声明 `["text"]`，`glm-5.3-flash` 原生支持 `["text","image"]`。CPA 新模型没有同名基础模板时使用最接近的文本或多模态模板补齐客户端能力字段。
 
 ## 快速开始（每台机器各执行一次）
 
@@ -57,7 +57,7 @@ GLM-5.3 / GLM-5.3-Flash 使用 Z.AI 的 GLM Coding Plan 专用 Responses 端点�
 4. 复制 `proxy-local.env.example` 为 `proxy-local.env`；默认不设置 `PROXY_URL`，未列入 `DIRECT_MODELS` 的静态模型会动态使用当前用户的 Windows 手动系统代理。启用 CPA 时设置 `CPA_BASE_URL`，启用本地访问令牌时设置 `PROXY_ACCESS_TOKEN`；排查历史兼容问题时可临时加 `HISTORY_MONITOR=1`。
 5. 双击或运行 `start-proxy.cmd` 启动中转。浏览器打开 `http://127.0.0.1:8787/healthz`，应返回 `{"status":"ok"}`。
 6. 按下方“Codex 配置”准备三处文件并运行切换脚本。
-7. 重新加载 Codex 配置与模型目录（模型目录缓存到 App Server 重启后刷新）。
+7. 完全退出并重启 Codex App Server，使其改用 CMP 动态模型接口；以后打开模型选择器时会异步刷新。
 
 以后更新：先执行 `git pull` 拉取最新代码，然后提醒用户手动重启中转（先运行 `stop-proxy.cmd`，再运行 `start-proxy.cmd`）；更新过程中不要自动重启服务，重启时机由用户决定。
 
@@ -65,7 +65,7 @@ GLM-5.3 / GLM-5.3-Flash 使用 Z.AI 的 GLM Coding Plan 专用 Responses 端点�
 
 ## CLIProxyAPI（CPA）
 
-CPA 必须作为独立服务部署，CodexModelProxy 只连接它，不负责启动、停止、账号池管理或升级。配置示例：
+CPA 必须作为独立服务部署并由用户手动启动、停止，CodexModelProxy 只连接它，不负责进程管理、账号池管理或升级。配置示例：
 
 `proxy-local.env`：
 
@@ -89,6 +89,16 @@ CPA_API_KEY=你的_CLIProxyAPI_服务端密钥
 - CPA 的 `/responses/compact` 失败时也不使用本项目的静态压缩后备模型。
 - CPA 请求使用 `CPA_API_KEY`，不会向 CPA 传递调用方的 ChatGPT 账号头、Cookie、`Authorization` 或 `X-Api-Key`。
 
+### 动态模型接口与缓存
+
+模型目录分三层传递：
+
+1. CPA 提供 `GET <CPA_BASE_URL>/models`，返回当前认证账号可用的模型 ID。
+2. CMP 的 `GET http://127.0.0.1:8787/v1/models` 请求 CPA 接口，为动态条目加 `cpa/` 前缀并补齐 Codex `ModelInfo`；响应同时包含 OpenAI 兼容的 `data` 数组和 Codex 使用的完整 `models` 数组。
+3. Codex App Server 请求当前 Provider 的 `/models?client_version=...`，因此本项目对应 CMP 的 `/v1/models`；返回结果进入 `model/list` RPC，模型选择器打开时先显示缓存，再异步原地刷新。
+
+CMP 的 CPA 模型缓存仅在进程内存中，默认 60 秒，过期后由下一次 `/v1/models` 请求触发刷新；并发刷新会合并为一次请求。刷新失败时保留最近一次成功结果，CMP 重启后该内存缓存消失。Codex App Server 的远端目录缓存位于 `%USERPROFILE%\.codex\models_cache.json`，默认有效期 5 分钟，并约每 4 分 30 秒后台刷新。Codex 配置不得设置 `model_catalog_json`，否则会改用权威静态目录并停止访问 CMP 的动态模型接口。
+
 ## 分支与更新流程
 
 - 仓库只维护 `master`：所有代码、文档和部署更新提交并推送到 `origin/master`。
@@ -107,7 +117,6 @@ model_provider = "OpenAI"
 model = "deepseek-v4-flash"
 model_reasoning_effort = "max"
 forced_login_method = "chatgpt"
-model_catalog_json = "C:/你的克隆目录/CodexModelProxy/models_unified.json"
 
 [model_providers.OpenAI]
 name = "unified"
@@ -125,18 +134,19 @@ http_headers = { "X-Proxy-Access-Token" = "你的访问令牌" }
 - `base_url`：若通过 `proxy-local.env` 修改了 `PORT`，这里要同步修改端口。
 - `wire_api = "responses"`：Codex 自定义 Provider 目前唯一支持的协议。
 - `http_headers`：`X-Proxy-Access-Token` 用于避免与 ChatGPT 的 `Authorization` 冲突，值必须与 `proxy-local.env` 中的 `PROXY_ACCESS_TOKEN` 一致；未启用访问令牌时删除该行。
+- 不设置 `model_catalog_json`：让 App Server 使用当前 Provider 的 `/models` 动态目录；设置该项会切回静态模型管理器。
 
 切换与生效：
 
 1. 启动代理：运行 `start-proxy.cmd`，浏览器打开 `http://127.0.0.1:8787/healthz`，应返回 `{"status":"ok"}`。
 2. 运行 `C:\Users\noha\.codex\config_unified.cmd`（个人目录的切换脚本，不在本仓库内）。
 3. 脚本只把模板中的模型、认证和 `[model_providers.OpenAI]` 区段写入活动 `config.toml`，桌面端、插件、MCP、项目权限等其他配置保留。
-4. 重启 Codex App Server 或重新加载配置，让启动时加载的模型目录刷新。
-5. 静态下拉列表应正好显示 10 个模型，默认模型为 `deepseek-v4-flash`；CPA 动态模型通过代理 `/v1/models` 查询或用 `cpa/<模型>` 显式指定。
+4. 完全退出并重启 Codex App Server，让模型管理器从静态模式切换为 Provider 动态模式。
+5. 打开模型选择器；它先显示 `%USERPROFILE%\.codex\models_cache.json` 中的缓存，再从 CMP 原地刷新。CPA 已启动时应同时看到 `cpa/<模型>`。
 
 只修改 `config_unified.toml` 不会影响当前 Codex 配置；运行 `config_unified.cmd` 才会把模板写入活动 `config.toml`。切换失败时脚本不会替换当前 `config.toml`。
 
-仓库内的 `config-templates/` 提供切换脚本示例：`switch_config.ps1`、`config_unified.toml`、`config_unified.cmd`。新机器把它们复制到 `%USERPROFILE%\.codex`，按本机修改模板中的 `model_catalog_json` 路径和访问令牌后即可运行；模板中的密钥均为占位符，不会携带任何真实凭据。
+仓库内的 `config-templates/` 提供切换脚本示例：`switch_config.ps1`、`config_unified.toml`、`config_unified.cmd`。新机器把它们复制到 `%USERPROFILE%\.codex`，按本机修改访问令牌后即可运行；模板中的密钥均为占位符，不会携带任何真实凭据。
 
 ## 命令速查
 
@@ -172,7 +182,7 @@ codex exec -m glm-5.3-flash "提示词"
 | `history-monitor.mjs` | 可选的脱敏历史结构监控、关联 ID、调用配对统计和日志轮换 |
 | `proxy-secrets.env.example` | 密钥模板；复制为 `proxy-secrets.env` 填写，后者不提交 |
 | `proxy-local.env.example` | 本机差异模板；复制为 `proxy-local.env` 填写，后者不提交 |
-| `models_unified.json` | Codex 静态统一模型目录（10 个模型） |
+| `models_unified.json` | CMP 内部的 10 个基础模型元数据；用于生成原模型、`direct/` 别名并为 CPA 动态模型补齐 Codex 字段 |
 | `config-templates/` | Codex 配置切换脚本示例（脱敏模板，复制到 `%USERPROFILE%\.codex` 后按本机修改） |
 | `test/proxy.test.mjs`、`test/cpa-provider.test.mjs`、`test/compact-fallback.test.mjs`、`test/system-proxy.test.mjs`、`test/history-normalize.test.mjs`、`test/history-monitor.test.mjs`、`test/muse-tool-compat.test.mjs` | 自动测试（模拟注册表、临时目录与内存 mock 上游，不消耗真实额度） |
 
@@ -184,7 +194,7 @@ Codex 始终先访问本地中转 `127.0.0.1:8787`；本节配置的是本地中
 DIRECT_MODELS=deepseek-v4-flash,deepseek-v4-pro,deepseek-v4-flash-direct,deepseek-v4-pro-direct
 ```
 
-当前默认路径为：GPT 三个模型、Muse 与 GLM-5.3 / GLM-5.3-Flash 跟随 Windows 系统代理，OC 两个模型和 DeepSeek 两个直连模型绕过代理。Muse 需要美区出口，不要把它加入 `DIRECT_MODELS`。CPA 使用显式 `CPA_BASE_URL` 并直接连接，不参与 `DIRECT_MODELS`、`PROXY_URL` 或 Windows 系统代理选择。将静态模型 slug 加入或移出 `DIRECT_MODELS` 后，重启本地中转即可生效，不需要修改 Codex 配置或刷新模型目录。白名单中的 slug 必须是 `proxy-config.json` 中已有的模型。
+当前默认路径为：GPT 三个模型、Muse、GLM-5.3 / GLM-5.3-Flash 与 CPA 跟随默认上游网络选择，OC 两个模型和 DeepSeek 两个直连模型绕过代理。Muse 需要美区出口，不要把它加入 `DIRECT_MODELS`。CPA 使用固定标识 `cpa` 进入同一代理解析器，不加入静态 `DIRECT_MODELS`。将静态模型 slug 加入或移出 `DIRECT_MODELS` 后，重启本地中转即可生效，不需要修改 Codex 配置。白名单中的 slug 必须是 `proxy-config.json` 中已有的模型。
 
 代理选择优先级如下：
 
@@ -223,8 +233,8 @@ node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fal
 - Z.AI GLM-5.3 / GLM-5.3-Flash 首版为完整直通：reasoning、工具输出与工具定义不做改写；若上游拒绝 Codex 的某些历史格式，需按实际错误增加适配。官方未公开 `/responses/compact` 的支持情况，压缩失败时沿用 `deepseek-v4-flash` 后备。GLM-5.3 仅声明文本输入，GLM-5.3-Flash 声明图文输入。
 - DeepSeek 直连的 `/responses` 兼容性取决于上游实现；代理不降级到 Chat Completions。
 - 历史整理只解决已知的 GPT/DeepSeek 历史格式兼容，不解决真正的上下文 token 超限；净化后若上游仍返回上下文长度错误，需要压缩或裁剪会话。
-- 模型目录在 Codex App Server 启动时加载，改动后需重启 App Server 才会刷新下拉列表。
-- 除 GLM-5.3 外的 9 个静态目录项允许附加图片，但实际模型不能原生识图时仍会按上游能力报错。
+- App Server 首次切换到动态 Provider 模式需要完全重启；之后打开模型选择器会触发异步刷新，磁盘缓存最长约 5 分钟。
+- 动态目录声明允许附加图片不代表实际上游一定能识图，最终仍以上游能力为准。
 
 ## 故障排查
 
@@ -234,7 +244,7 @@ node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fal
 - OpenCode 返回 403 区域限制：如果希望 OpenCode 走代理，请从 `DIRECT_MODELS` 删除对应的 OC 模型 slug，并确认 Windows 手动系统代理或显式 `PROXY_URL` 已启用且代理程序正在运行。
 - GLM-5.3 返回 401：确认 `proxy-secrets.env` 中的 `ZAI_API_KEY` 是 Z.AI Coding Plan 专用的有效密钥（团队计划需用团队密钥）。
 - 系统代理解析返回 502：确认 Windows“设置”中的手动代理已启用且地址有效；PAC、自动检测和 WinHTTP 设置不会被读取。需要临时绕过时在 `proxy-local.env` 写入空值 `PROXY_URL=` 并重启中转。
-- 模型列表不对：确认 `model_catalog_json` 指向本机克隆目录的 `models_unified.json`，并重启 Codex App Server。
+- 模型列表不对：确认 Codex 配置没有 `model_catalog_json`，然后检查 CMP `/v1/models` 的 `models` 数组；首次切换后完全退出并重启 App Server。仍显示旧内容时检查 `%USERPROFILE%\.codex\models_cache.json` 的时间，并确认 CPA 已由用户手动启动。
 - GPT 模型返回 401：确认 Codex 已完成 ChatGPT 登录，且 `forced_login_method = "chatgpt"`、`requires_openai_auth = true`。
 - 需要排查偶发历史错误：临时设置 `HISTORY_MONITOR=1` 并重启中转，再复现一次；检查 `history-monitor.jsonl` 中同一 `request_id` 的三类结构事件。排查完成后关闭开关并手动重启中转。
 

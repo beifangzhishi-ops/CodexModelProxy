@@ -384,6 +384,16 @@ test('CPA 动态模型进入模型列表并使用独立服务端认证', async (
     assert.ok(list.data.some((model) => model.id === 'cpa/gpt-cpa-one'));
     assert.ok(list.data.some((model) => model.id === 'cpa/claude-cpa-two'));
     assert.ok(list.models.some((model) => model.slug === 'cpa/gpt-cpa-one'));
+    const cpaCatalogModel = list.models.find((model) => model.slug === 'cpa/gpt-cpa-one');
+    assert.equal(cpaCatalogModel.display_name, 'CPA · gpt-cpa-one');
+    assert.equal(cpaCatalogModel.shell_type, 'shell_command');
+    assert.equal(cpaCatalogModel.visibility, 'list');
+    assert.equal(cpaCatalogModel.supported_in_api, true);
+    assert.ok(cpaCatalogModel.supported_reasoning_levels.length > 0);
+    assert.deepEqual(cpaCatalogModel.truncation_policy, { mode: 'tokens', limit: 10000 });
+    assert.deepEqual(cpaCatalogModel.additional_speed_tiers, []);
+    assert.deepEqual(cpaCatalogModel.service_tiers, []);
+    assert.equal(cpaCatalogModel.default_service_tier, null);
     assert.equal(mock.seen[0].url, '/models');
     assert.equal(mock.seen[0].auth, 'Bearer cpa-service-key');
 
@@ -869,7 +879,7 @@ test('上游错误状态、响应头和正文保持不变', async () => {
   });
 });
 
-test('生产配置的路由与统一模型目录严格对应', () => {
+test('生产配置的静态路由与基础模型目录严格对应', () => {
   const config = loadConfig();
   assert.deepEqual(Object.keys(config.models), MODEL_SLUGS);
   assert.deepEqual(config.catalog.models.map((model) => model.slug), MODEL_SLUGS);
