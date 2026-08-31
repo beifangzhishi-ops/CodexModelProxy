@@ -81,7 +81,7 @@ CPA_API_KEY=你的_CLIProxyAPI_服务端密钥
 ```
 
 - `CPA_BASE_URL` 与 `CPA_API_KEY` 都不设置时，CPA 功能关闭；只设置其中一个时，服务拒绝启动并指出缺失项。
-- `CPA_BASE_URL` 是包含 `/v1` 的 OpenAI 兼容根地址。当前部署固定使用 Tailscale Funnel 公网地址，用于验证完整公网链路；同机本地直连可另行改成 `http://127.0.0.1:8317/v1`。CPA 模型列表同步不经过本项目的 `PROXY_URL` 或 Windows 系统代理，模型请求仍使用既有上游网络选择逻辑。
+- `CPA_BASE_URL` 是包含 `/v1` 的 OpenAI 兼容根地址。当前部署固定使用 Tailscale Funnel 公网地址，用于验证完整公网链路；CPA 的 `/models`、`/responses` 与 `/responses/compact` 都使用 CMP 的默认上游网络选择，当前宿舍机通过 FlClash `127.0.0.1:7890` 访问 Funnel。同机也可将地址改成 `http://127.0.0.1:8317/v1` 并按需设为直连。
 - `CPA_MODELS_CACHE_TTL_SECONDS` 必须是正整数，默认 60 秒。
 - `cpa/<模型>` 剥离前缀后发往 CPA；`direct/<模型>` 剥离前缀后走现有静态路由；无前缀模型仍走现有静态路由。
 - `/v1/models` 同时返回无前缀静态模型、`direct/` 静态别名和 CPA 动态模型。CPA 模型刷新失败时继续返回最近一次成功缓存；从未成功时只返回静态模型。

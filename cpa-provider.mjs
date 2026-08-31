@@ -1,5 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
+import { createProxyAgent } from './proxy-agent.mjs';
 
 const DEFAULT_CACHE_TTL_SECONDS = 60;
 const MODEL_LIST_TIMEOUT_MS = 10000;
@@ -45,7 +46,12 @@ export function loadCpaConfig(env = process.env, secrets = {}) {
   };
 }
 
-export function createCpaModelCatalog({ config, logger = console, fetchModels = requestCpaModels }) {
+export function createCpaModelCatalog({
+  config,
+  logger = console,
+  fetchModels = requestCpaModels,
+  resolveProxy = async () => ({ url: '', mode: 'direct' }),
+}) {
   let cachedModels = [];
   let refreshedAt = 0;
   let refreshPromise = null;
@@ -58,7 +64,8 @@ export function createCpaModelCatalog({ config, logger = console, fetchModels = 
       }
       if (!refreshPromise) {
         refreshPromise = Promise.resolve()
-          .then(() => fetchModels(config))
+          .then(() => resolveProxy())
+          .then((proxy) => fetchModels(config, proxy))
           .then((models) => {
             cachedModels = normalizeCpaModels(models);
             refreshedAt = Date.now();
@@ -99,12 +106,16 @@ export function normalizeCpaModels(models) {
   return normalized;
 }
 
-function requestCpaModels(config) {
+function requestCpaModels(config, proxy) {
   return new Promise((resolve, reject) => {
     const upstreamUrl = new URL(`${config.baseUrl}/models`);
     const lib = upstreamUrl.protocol === 'https:' ? https : http;
+    const agent = upstreamUrl.protocol === 'https:' && proxy?.url
+      ? createProxyAgent(proxy.url)
+      : undefined;
     const outgoing = lib.request(upstreamUrl, {
       method: 'GET',
+      agent,
       headers: {
         authorization: `Bearer ${config.apiKey}`,
         accept: 'application/json',

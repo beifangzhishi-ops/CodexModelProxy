@@ -410,6 +410,39 @@ test('CPA 动态模型进入模型列表并使用独立服务端认证', async (
   });
 });
 
+test('CPA 模型列表、普通请求与 compact 请求共用默认代理选择', async () => {
+  let proxyCalls = 0;
+  await withServers(async (mock, proxy) => {
+    const listResponse = await fetch(`${proxy.baseUrl}/v1/models`);
+    assert.equal(listResponse.status, 200);
+
+    const response = await postJson(proxy.baseUrl, {
+      model: 'cpa/gpt-cpa-one',
+      input: 'hello',
+    });
+    assert.equal(response.status, 200);
+
+    const compact = await postCompact(proxy.baseUrl, {
+      model: 'cpa/gpt-cpa-one',
+      input: 'hello',
+    });
+    assert.equal(compact.status, 200);
+    assert.equal(proxyCalls, 3);
+    assert.deepEqual(mock.seen.map((request) => request.url), [
+      '/models',
+      '/responses',
+      '/responses/compact',
+    ]);
+  }, {
+    secrets: { ...testSecrets(), CPA_API_KEY: 'cpa-service-key' },
+    env: { CPA_BASE_URL: '__MOCK_BASE_URL__' },
+    systemProxyResolver: async () => {
+      proxyCalls += 1;
+      return { url: '', mode: 'direct' };
+    },
+  });
+});
+
 test('CPA 未配置时返回 503，未知 CPA 模型在启用后仍交给上游判断', async () => {
   await withServers(async (mock, proxy) => {
     const disabled = await postJson(proxy.baseUrl, { model: 'cpa/any-model', input: 'hello' });

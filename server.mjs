@@ -269,6 +269,7 @@ export function createProxyServer({
     config: cpaConfig,
     logger,
     fetchModels: cpaModelFetcher,
+    resolveProxy: () => proxyForModel('cpa'),
   });
 
   function isAuthorized(req) {
@@ -322,9 +323,9 @@ export function createProxyServer({
           return;
         }
         try {
-          const proxy = selection.provider === 'cpa'
-            ? { url: '', mode: 'direct' }
-            : await proxyForModel(selection.routeSlug);
+          const proxy = await proxyForModel(
+            selection.provider === 'cpa' ? 'cpa' : selection.routeSlug,
+          );
           forwardToUpstream(
             req,
             res,
@@ -378,7 +379,7 @@ export function createProxyServer({
           secrets,
           logger,
           proxyForModel: isCpa
-            ? async () => ({ url: '', mode: 'direct' })
+            ? async () => proxyForModel('cpa')
             : async (attemptSlug) => proxyForModel(
               attemptSlug === model ? selection.routeSlug : attemptSlug,
             ),
