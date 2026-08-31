@@ -70,7 +70,7 @@ CPA 必须作为独立服务部署，CodexModelProxy 只连接它，不负责启
 `proxy-local.env`：
 
 ```text
-CPA_BASE_URL=http://127.0.0.1:8317/v1
+CPA_BASE_URL=https://cpa-node.tail7c23f0.ts.net/v1
 CPA_MODELS_CACHE_TTL_SECONDS=60
 ```
 
@@ -81,7 +81,7 @@ CPA_API_KEY=你的_CLIProxyAPI_服务端密钥
 ```
 
 - `CPA_BASE_URL` 与 `CPA_API_KEY` 都不设置时，CPA 功能关闭；只设置其中一个时，服务拒绝启动并指出缺失项。
-- `CPA_BASE_URL` 是包含 `/v1` 的 OpenAI 兼容根地址。CPA 连接不经过本项目的 `PROXY_URL` 或 Windows 系统代理。
+- `CPA_BASE_URL` 是包含 `/v1` 的 OpenAI 兼容根地址。当前部署固定使用 Tailscale Funnel 公网地址，用于验证完整公网链路；同机本地直连可另行改成 `http://127.0.0.1:8317/v1`。CPA 模型列表同步不经过本项目的 `PROXY_URL` 或 Windows 系统代理，模型请求仍使用既有上游网络选择逻辑。
 - `CPA_MODELS_CACHE_TTL_SECONDS` 必须是正整数，默认 60 秒。
 - `cpa/<模型>` 剥离前缀后发往 CPA；`direct/<模型>` 剥离前缀后走现有静态路由；无前缀模型仍走现有静态路由。
 - `/v1/models` 同时返回无前缀静态模型、`direct/` 静态别名和 CPA 动态模型。CPA 模型刷新失败时继续返回最近一次成功缓存；从未成功时只返回静态模型。
@@ -91,10 +91,8 @@ CPA_API_KEY=你的_CLIProxyAPI_服务端密钥
 
 ## 分支与更新流程
 
-- 所有代码与文档更新默认提交到 `beta` 分支并推送到 `origin/beta`，不直接推送 `origin/master`。
-- 仅当用户明确指示合并时，才把 `beta` 合并到 `master` 并推送 `origin/master`。
-- 未合并到 `master` 的更新以 `beta` 分支为准；需要试用时切换到 `beta` 分支部署。
-- 2026-08-24 已从 `master` 当前头部重建 `beta`，后续更新继续在新 `beta` 上进行；原 `beta` 及其中未合并的 DeepSeek Pro `we_need` 推理风格提示完整保存在 `pro提示分叉`。
+- 仓库只维护 `master`：所有代码、文档和部署更新提交并推送到 `origin/master`。
+- 更新前先拉取 `master`，测试通过后提交并推送；不再使用独立的 `beta` 开发分支。
 
 ## Codex 配置
 
