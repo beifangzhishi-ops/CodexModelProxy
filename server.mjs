@@ -597,27 +597,20 @@ function invalidModel(model) {
 
 async function sendModelList(res, routes, catalogModels, cpaCatalog) {
   const cpaModels = await cpaCatalog.getModels();
-  const directData = Object.keys(routes).flatMap((slug) => [
-    { id: slug, object: 'model', owned_by: 'unified' },
-    { id: `direct/${slug}`, object: 'model', owned_by: 'unified' },
-  ]);
+  const staticData = Object.keys(routes).map((slug) => ({
+    id: slug,
+    object: 'model',
+    owned_by: 'unified',
+  }));
   const baseCatalog = catalogModels || Object.keys(routes).map((slug) => ({
     slug,
     display_name: slug,
   }));
-  const directCatalog = baseCatalog.flatMap((model) => [
-    model,
-    {
-      ...model,
-      slug: `direct/${model.slug}`,
-      display_name: `Direct · ${model.display_name || model.slug}`,
-    },
-  ]);
-  const cpaCatalogModels = buildCpaCatalogModels(cpaModels, baseCatalog, directCatalog.length);
+  const cpaCatalogModels = buildCpaCatalogModels(cpaModels, baseCatalog, baseCatalog.length);
   sendJson(res, 200, {
     object: 'list',
-    models: [...directCatalog, ...cpaCatalogModels],
-    data: [...directData, ...cpaModels],
+    models: [...baseCatalog, ...cpaCatalogModels],
+    data: [...staticData, ...cpaModels],
   });
 }
 

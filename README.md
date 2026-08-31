@@ -21,7 +21,7 @@ Codex App Server 从当前 Provider 的 `/models` 动态读取完整模型目录
 | `glm-5.3` | ZAI · GLM-5.3 | `ZAI_API_KEY` | Z.AI `glm-5.3` |
 | `glm-5.3-flash` | ZAI · GLM-5.3-Flash | `ZAI_API_KEY` | Z.AI `glm-5.3-flash` |
 
-默认模型为 `deepseek-v4-flash`（OC · DSV4 Flash）。CMP 从 CPA `/models` 动态同步模型，在自己的 `/v1/models` 中补成完整 Codex 模型元数据并加上 `cpa/` 前缀；Codex App Server 再从 CMP 动态取得原模型、`direct/` 别名和 CPA 模型。
+默认模型为 `deepseek-v4-flash`（OC · DSV4 Flash）。CMP 从 CPA `/models` 动态同步模型，在自己的 `/v1/models` 中补成完整 Codex 模型元数据并加上 `cpa/` 前缀；Codex App Server 再从 CMP 动态取得 10 个真实基础通道和 CPA 模型。DeepSeek 的两条直连通道已使用 `-direct` 后缀，不再额外生成 `direct/` 目录别名。
 
 Muse Spark 1.2 Contributor 仅作可选模型：需要 GO workspace 开启数据训练授权，且本机代理出口在美国；思考档位支持 `minimal/low/medium/high/xhigh`，默认 `high`；支持图片输入。压缩失败时沿用 `deepseek-v4-flash` 后备。
 
@@ -47,7 +47,7 @@ GLM-5.3 / GLM-5.3-Flash 使用 Z.AI 的 GLM Coding Plan 专用 Responses 端点�
 
 ## 图片上传
 
-CMP 返回的 Codex 模型元数据中，除 `glm-5.3` 外的基础模型、`direct/` 别名和 CPA 模型均声明支持图片附件；能否真正识别图片取决于实际上游能力。`glm-5.3` 按官方能力仅声明 `["text"]`，`glm-5.3-flash` 原生支持 `["text","image"]`。CPA 新模型没有同名基础模板时使用最接近的文本或多模态模板补齐客户端能力字段。
+CMP 返回的 Codex 模型元数据中，除 `glm-5.3` 外的基础模型和 CPA 模型均声明支持图片附件；能否真正识别图片取决于实际上游能力。`glm-5.3` 按官方能力仅声明 `["text"]`，`glm-5.3-flash` 原生支持 `["text","image"]`。CPA 新模型没有同名基础模板时使用最接近的文本或多模态模板补齐客户端能力字段。
 
 ## 快速开始（每台机器各执行一次）
 
@@ -83,8 +83,8 @@ CPA_API_KEY=你的_CLIProxyAPI_服务端密钥
 - `CPA_BASE_URL` 与 `CPA_API_KEY` 都不设置时，CPA 功能关闭；只设置其中一个时，服务拒绝启动并指出缺失项。
 - `CPA_BASE_URL` 是包含 `/v1` 的 OpenAI 兼容根地址。当前部署固定使用 Tailscale Funnel 公网地址，用于验证完整公网链路；CPA 的 `/models`、`/responses` 与 `/responses/compact` 都使用 CMP 的默认上游网络选择，当前宿舍机通过 FlClash `127.0.0.1:7890` 访问 Funnel。同机也可将地址改成 `http://127.0.0.1:8317/v1` 并按需设为直连。
 - `CPA_MODELS_CACHE_TTL_SECONDS` 必须是正整数，默认 60 秒。
-- `cpa/<模型>` 剥离前缀后发往 CPA；`direct/<模型>` 剥离前缀后走现有静态路由；无前缀模型仍走现有静态路由。
-- `/v1/models` 同时返回无前缀静态模型、`direct/` 静态别名和 CPA 动态模型。CPA 模型刷新失败时继续返回最近一次成功缓存；从未成功时只返回静态模型。
+- `cpa/<模型>` 剥离前缀后发往 CPA；无前缀模型走现有静态路由。旧的 `direct/<模型>` 显式请求仍兼容，但不再出现在模型目录中；真正的 DeepSeek 直连通道使用 `deepseek-v4-flash-direct` 和 `deepseek-v4-pro-direct`。
+- `/v1/models` 只返回 10 个真实静态通道和 CPA 动态模型，不生成重复的 `direct/` 目录别名。CPA 模型刷新失败时继续返回最近一次成功缓存；从未成功时只返回静态模型。
 - 任意非空 `cpa/<模型>` 都允许转发，由 CPA 判断模型是否存在。CPA 返回限流、额度不足、4xx、5xx 或网络错误时直接返回调用方，不切换到静态路由。
 - CPA 的 `/responses/compact` 失败时也不使用本项目的静态压缩后备模型。
 - CPA 请求使用 `CPA_API_KEY`，不会向 CPA 传递调用方的 ChatGPT 账号头、Cookie、`Authorization` 或 `X-Api-Key`。
@@ -161,7 +161,6 @@ CLI 单独指定模型（不改全局配置）：
 codex exec -m gpt-5.6-sol "提示词"
 codex exec -m deepseek-v4-flash "提示词"
 codex exec -m deepseek-v4-flash-direct "提示词"
-codex exec -m direct/gpt-5.6-sol "提示词"
 codex exec -m cpa/gpt-5.6-sol "提示词"
 codex exec -m glm-5.3 "提示词"
 codex exec -m glm-5.3-flash "提示词"
@@ -182,7 +181,7 @@ codex exec -m glm-5.3-flash "提示词"
 | `history-monitor.mjs` | 可选的脱敏历史结构监控、关联 ID、调用配对统计和日志轮换 |
 | `proxy-secrets.env.example` | 密钥模板；复制为 `proxy-secrets.env` 填写，后者不提交 |
 | `proxy-local.env.example` | 本机差异模板；复制为 `proxy-local.env` 填写，后者不提交 |
-| `models_unified.json` | CMP 内部的 10 个基础模型元数据；用于生成原模型、`direct/` 别名并为 CPA 动态模型补齐 Codex 字段 |
+| `models_unified.json` | CMP 内部的 10 个基础模型元数据；用于生成真实模型目录并为 CPA 动态模型补齐 Codex 字段 |
 | `config-templates/` | Codex 配置切换脚本示例（脱敏模板，复制到 `%USERPROFILE%\.codex` 后按本机修改） |
 | `test/proxy.test.mjs`、`test/cpa-provider.test.mjs`、`test/compact-fallback.test.mjs`、`test/system-proxy.test.mjs`、`test/history-normalize.test.mjs`、`test/history-monitor.test.mjs`、`test/muse-tool-compat.test.mjs` | 自动测试（模拟注册表、临时目录与内存 mock 上游，不消耗真实额度） |
 
@@ -224,7 +223,7 @@ HISTORY_MONITOR_FILE=history-monitor.jsonl
 node --test test\history-normalize.test.mjs test\proxy.test.mjs test\compact-fallback.test.mjs test\history-monitor.test.mjs test\system-proxy.test.mjs test\muse-tool-compat.test.mjs test\cpa-provider.test.mjs
 ```
 
-测试覆盖健康检查、静态与 CPA 动态模型列表、10 条静态路由、`direct/` 与 `cpa/` 前缀、CPA 配置三态、模型缓存与失败保留、模型名与密钥隔离、CPA/直通并发隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、CPA 不跨源后备、未知模型拦截，GPT/DeepSeek reasoning 字段整理、Muse 跨类型输入项 ID 规范化、`web_search_call` 过滤、畸形推理项保留、四条 DS 路由工具输出 JSON 文本化、Muse 工具展平/名称别名/JSON/SSE 调用恢复与原请求不可变、ZAI 直通保真、图片数组与调用配对保留，以及 Windows 系统代理格式、优先级、动态刷新、失败后备和历史监控。
+测试覆盖健康检查、无重复别名的静态与 CPA 动态模型列表、10 条静态路由、旧 `direct/` 请求兼容与 `cpa/` 前缀、CPA 配置三态、模型缓存与失败保留、模型名与密钥隔离、CPA/直通并发隔离、请求体保真、JSON/SSE 原样透传、本地访问令牌、上游错误保持、日志脱敏、压缩后备、CPA 不跨源后备、未知模型拦截，GPT/DeepSeek reasoning 字段整理、Muse 跨类型输入项 ID 规范化、`web_search_call` 过滤、畸形推理项保留、四条 DS 路由工具输出 JSON 文本化、Muse 工具展平/名称别名/JSON/SSE 调用恢复与原请求不可变、ZAI 直通保真、图片数组与调用配对保留，以及 Windows 系统代理格式、优先级、动态刷新、失败后备和历史监控。
 
 ## 已知限制
 

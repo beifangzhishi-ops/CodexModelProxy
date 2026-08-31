@@ -294,7 +294,7 @@ async function withServers(fn, {
   }
 }
 
-test('健康检查与模型列表包含无前缀及 direct/ 目录项，GLM-5.3 能力保持不变', async () => {
+test('健康检查与模型列表只展示真实静态通道，GLM-5.3 能力保持不变', async () => {
   await withServers(async (mock, proxy) => {
     const health = await fetch(`${proxy.baseUrl}/healthz`);
     assert.equal(health.status, 200);
@@ -303,17 +303,16 @@ test('健康检查与模型列表包含无前缀及 direct/ 目录项，GLM-5.3 
     const modelsRes = await fetch(`${proxy.baseUrl}/v1/models`);
     assert.equal(modelsRes.status, 200);
     const modelsJson = await modelsRes.json();
-    const expectedSlugs = MODEL_SLUGS.flatMap((slug) => [slug, `direct/${slug}`]);
-    assert.deepEqual(modelsJson.data.map((model) => model.id), expectedSlugs);
-    assert.deepEqual(modelsJson.models.map((model) => model.slug), expectedSlugs);
+    assert.deepEqual(modelsJson.data.map((model) => model.id), MODEL_SLUGS);
+    assert.deepEqual(modelsJson.models.map((model) => model.slug), MODEL_SLUGS);
+    assert.ok(modelsJson.data.every((model) => !model.id.startsWith('direct/')));
+    assert.ok(modelsJson.models.every((model) => !model.slug.startsWith('direct/')));
     const glm = modelsJson.models.find((model) => model.slug === 'glm-5.3');
     assert.deepEqual(glm.input_modalities, ['text']);
     const glmFlash = modelsJson.models.find((model) => model.slug === 'glm-5.3-flash');
     assert.deepEqual(glmFlash.input_modalities, ['text', 'image']);
     assert.equal(glmFlash.supports_image_detail_original, true);
-    const imageModels = modelsJson.models.filter(
-      (model) => model.slug !== 'glm-5.3' && model.slug !== 'direct/glm-5.3',
-    );
+    const imageModels = modelsJson.models.filter((model) => model.slug !== 'glm-5.3');
     assert.ok(imageModels.every((model) => model.input_modalities.includes('image')));
     assert.ok(imageModels.every((model) => model.supports_image_detail_original === true));
     assert.equal(mock.seen.length, 0);
