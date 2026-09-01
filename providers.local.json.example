@@ -1,0 +1,65 @@
+{
+  "providers": {
+    "cpa": {
+      "enabled": true,
+      "base_url": "https://cpa-node.tail7c23f0.ts.net/v1",
+      "api_key": "",
+      "auth_mode": "api_key",
+      "protocol": "responses",
+      "discover_models": true,
+      "model_prefix": "cpa/",
+      "compat_profile": "openai-auto",
+      "network": "default",
+      "display_name": "CPA",
+      "discovery": {
+        "cache_ttl_seconds": 60,
+        "failure_cooldown_seconds": 30,
+        "timeout_ms": 10000,
+        "max_response_bytes": 8388608
+      }
+    },
+    "opencode": {
+      "enabled": true,
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "api_key": "",
+      "auth_mode": "api_key",
+      "protocol": "responses",
+      "discover_models": false,
+      "model_prefix": "oc/",
+      "compat_profile": "deepseek",
+      "network": "default"
+    },
+    "deepseek": {
+      "enabled": true,
+      "base_url": "https://api.deepseek.com",
+      "api_key": "",
+      "auth_mode": "api_key",
+      "protocol": "responses",
+      "discover_models": false,
+      "model_prefix": "ds/",
+      "compat_profile": "deepseek",
+      "network": "direct"
+    },
+    "zai": {
+      "enabled": true,
+      "base_url": "https://api.z.ai/api/v1",
+      "api_key": "",
+      "auth_mode": "api_key",
+      "protocol": "responses",
+      "discover_models": false,
+      "model_prefix": "zai/",
+      "compat_profile": "passthrough",
+      "network": "default"
+    },
+    "chatgpt": {
+      "enabled": true,
+      "base_url": "https://chatgpt.com/backend-api/codex",
+      "auth_mode": "openai_passthrough",
+      "protocol": "responses",
+      "discover_models": false,
+      "model_prefix": "chatgpt/",
+      "compat_profile": "openai",
+      "network": "default"
+    }
+  }
+}

@@ -503,7 +503,7 @@ test('CPA 保持 SSE 与错误响应，不切换到静态直通路由', async ()
   });
 });
 
-test('CPA compact 请求失败时不使用静态后备模型', async () => {
+test('CPA compact 请求失败时直接返回且只请求一次', async () => {
   await withServers(async (mock, proxy) => {
     const result = await postCompact(proxy.baseUrl, {
       model: 'cpa/gpt-cpa-one',
@@ -880,6 +880,7 @@ test('上游错误状态、响应头和正文保持不变', async () => {
 
 test('生产配置的静态路由与基础模型目录严格对应', () => {
   const config = loadConfig();
+  assert.equal(config.compact_fallback_model, undefined);
   assert.deepEqual(Object.keys(config.models), MODEL_SLUGS);
   assert.deepEqual(config.catalog.models.map((model) => model.slug), MODEL_SLUGS);
   assert.equal(config.models['deepseek-v4-flash'].auth_mode, 'api_key');

@@ -8,7 +8,7 @@ import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { forwardCompactWithFallback } from './compact-forward.mjs';
+import { forwardCompact } from './compact-forward.mjs';
 import {
   normalizeResponsesBody,
   isValidReasoningFormat,
@@ -22,7 +22,14 @@ import {
 import { createHistoryMonitor } from './history-monitor.mjs';
 import { createWindowsSystemProxyResolver } from './system-proxy.mjs';
 import { createProxyAgent } from './proxy-agent.mjs';
-import { createCpaModelCatalog, loadCpaConfig } from './cpa-provider.mjs';
+import {
+  createProviderRegistry,
+  DEFAULT_PROVIDERS_FILE,
+  loadProviderFile,
+  loadRuntimeEnv,
+  parseEnvFile,
+} from './provider-registry.mjs';
+import { resolveModelSelection as resolveRegistryModelSelection } from './model-resolver.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_FILE = path.join(__dirname, 'proxy-config.json');
@@ -31,17 +38,6 @@ const MAX_BODY_BYTES = 64 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 600000;
 
 const VALID_TOOL_SCHEMA_COMPAT = new Set(['muse']);
-const DEFAULT_CPA_TEMPLATE_SLUG = 'gpt-5.6-luna';
-const CPA_MODEL_TEMPLATE_SLUGS = new Map([
-  ['codex-auto-review', 'gpt-5.6-sol'],
-  ['gpt-5.3-codex-spark', 'gpt-5.6-luna'],
-  ['gpt-5.4', 'gpt-5.6-terra'],
-  ['gpt-5.4-mini', 'gpt-5.6-luna'],
-  ['gpt-5.5', 'gpt-5.6-terra'],
-  ['gpt-image-1.5', 'glm-5.3-flash'],
-  ['gpt-image-2', 'glm-5.3-flash'],
-]);
-
 export function isValidToolSchemaCompat(value) {
   return VALID_TOOL_SCHEMA_COMPAT.has(value);
 }
@@ -99,7 +95,7 @@ const HOP_BY_HOP_HEADERS = new Set([
   'transfer-encoding',
   'upgrade',
 ]);
-const CPA_CLIENT_CREDENTIAL_HEADERS = new Set([
+const CLIENT_CREDENTIAL_HEADERS = new Set([
   'chatgpt-account-id',
   'cookie',
   'openai-organization',
@@ -115,9 +111,10 @@ export function parseDirectModels(raw, routes) {
       .map((slug) => slug.trim())
       .filter(Boolean),
   )];
-  const unknownModels = models.filter(
-    (slug) => !Object.prototype.hasOwnProperty.call(routes || {}, slug),
-  );
+  const knownModels = routes instanceof Set
+    ? routes
+    : new Set(Object.keys(routes || {}));
+  const unknownModels = models.filter((slug) => !knownModels.has(slug));
   if (unknownModels.length > 0) {
     throw new Error(`DIRECT_MODELS 包含未知模型：${unknownModels.join('、')}`);
   }
@@ -139,8 +136,11 @@ export function createUpstreamProxyResolver({
   const hasConfigOverride = !hasEnvOverride && configProxyUrl.length > 0;
   const fixedProxyUrl = hasEnvOverride ? String(env.PROXY_URL).trim() : configProxyUrl;
 
-  return async (slug) => {
-    if (directModels.has(slug)) return { url: '', mode: 'direct' };
+  return async (slug, networkPolicy = 'default') => {
+    if (networkPolicy === 'direct' || directModels.has(slug)) {
+      return { url: '', mode: 'direct' };
+    }
+    if (networkPolicy === 'system') return systemProxyResolver();
     if (hasEnvOverride || hasConfigOverride) {
       return {
         url: fixedProxyUrl,
@@ -163,8 +163,9 @@ export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT
   if (typeof config !== 'object' || config === null || Array.isArray(config)) {
     throw new Error('proxy-config.json 顶层必须是对象');
   }
-  if (!config.models || typeof config.models !== 'object' || Array.isArray(config.models)) {
-    throw new Error('proxy-config.json 缺少 models 对象');
+  if (config.models === undefined) config.models = {};
+  if (typeof config.models !== 'object' || Array.isArray(config.models)) {
+    throw new Error('proxy-config.json 的 models 必须是对象');
   }
   for (const [slug, route] of Object.entries(config.models)) {
     if (!route.upstream_base_url || typeof route.upstream_base_url !== 'string') {
@@ -196,16 +197,6 @@ export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT
       throw new Error(`路由 ${slug} 的 tool_schema_compat 无效`);
     }
   }
-  if (
-    config.compact_fallback_model !== undefined &&
-    (
-      typeof config.compact_fallback_model !== 'string' ||
-      !config.compact_fallback_model.trim() ||
-      !config.models[config.compact_fallback_model]
-    )
-  ) {
-    throw new Error('compact_fallback_model 必须是 models 中已有的模型 slug');
-  }
   if (config.model_catalog_file) {
     const catalogFile = path.resolve(path.dirname(resolvedConfigFile), config.model_catalog_file);
     let catalog;
@@ -217,70 +208,69 @@ export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT
     if (!catalog || !Array.isArray(catalog.models)) {
       throw new Error('模型目录必须包含 models 数组');
     }
-    assertSameSlugs('路由与模型目录名册', Object.keys(config.models), catalog.models.map((model) => model.slug));
+    if (Object.keys(config.models).length > 0) {
+      assertSameSlugs('路由与模型目录名册', Object.keys(config.models), catalog.models.map((model) => model.slug));
+    }
     config.catalog = catalog;
   }
   return config;
 }
 
 export function loadSecrets(secretsFile = process.env.PROXY_SECRETS_FILE || DEFAULT_SECRETS_FILE) {
-  const secrets = {};
   let raw = '';
   try {
     raw = fs.readFileSync(secretsFile, 'utf8');
   } catch (err) {
     if (err.code === 'ENOENT') {
       // 密钥文件不存在时允许纯环境变量注入，由启动时的缺失检查统一处理
-      return secrets;
+      return {};
     }
     throw new Error(`无法读取密钥文件：${secretsFile}（${err.message}）`);
   }
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq <= 0) continue;
-    const key = trimmed.slice(0, eq).trim();
-    let value = trimmed.slice(eq + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (key) secrets[key] = value;
-  }
-  return secrets;
+  return parseEnvFile(raw);
 }
 
 export function createProxyServer({
   config,
-  secrets,
+  secrets = {},
   logger = console,
   env = process.env,
   directModels: configuredDirectModels,
   historyMonitor: configuredHistoryMonitor,
   systemProxyResolver: configuredSystemProxyResolver,
-  cpaModelFetcher,
+  registry: configuredRegistry,
+  localConfig: configuredLocalConfig,
+  discoveryFetchModels,
+  validateProviderCredentials = false,
 }) {
   const routes = config.models || {};
   const catalogModels = Array.isArray(config.catalog?.models) ? config.catalog.models : null;
-  const compactFallbackSlug = config.compact_fallback_model || 'deepseek-v4-flash';
   const accessToken = (env.PROXY_ACCESS_TOKEN || config.access_token || '').trim();
-  const directModels = configuredDirectModels || parseDirectModels(env.DIRECT_MODELS, routes);
   const systemProxyResolver = configuredSystemProxyResolver || createWindowsSystemProxyResolver({ logger });
-  const proxyForModel = createUpstreamProxyResolver({
+  let proxyForModel;
+  const registry = configuredRegistry || createProviderRegistry({
     config,
+    localConfig: configuredLocalConfig || { providers: {} },
     env,
-    directModels,
-    systemProxyResolver,
+    secrets,
+    logger,
+    resolveProxy: (_providerId, networkPolicy) => proxyForModel
+      ? proxyForModel(_providerId, networkPolicy)
+      : Promise.resolve({ url: '', mode: 'direct' }),
+    discoveryFetchModels,
+    validateCredentials: validateProviderCredentials,
+    includeOptionalProviders: true,
   });
+  const knownModels = new Set([
+    ...Object.keys(routes),
+    ...Object.keys(config.aliases || {}),
+    ...registry.knownLegacySlugs(),
+    ...registry.knownCanonicalModels(),
+  ]);
+  const directModels = configuredDirectModels || parseDirectModels(env.DIRECT_MODELS, knownModels);
+  proxyForModel = createUpstreamProxyResolver({ config, env, directModels, systemProxyResolver });
   const requireToken = accessToken.length > 0;
   const historyMonitor = configuredHistoryMonitor || createHistoryMonitor({ env, logger });
-  const cpaConfig = loadCpaConfig(env, secrets);
-  const cpaCatalog = createCpaModelCatalog({
-    config: cpaConfig,
-    logger,
-    fetchModels: cpaModelFetcher,
-    resolveProxy: () => proxyForModel('cpa'),
-  });
 
   function isAuthorized(req) {
     if (!requireToken) return true;
@@ -304,7 +294,7 @@ export function createProxyServer({
     }
 
     if (req.method === 'GET' && pathname === '/v1/models') {
-      void sendModelList(res, routes, catalogModels, cpaCatalog).catch((err) => {
+      void sendModelList(res, registry, catalogModels).catch((err) => {
         logger.error(`[codex-proxy] 模型列表生成失败：${err.message}`);
         if (!res.headersSent) {
           sendJson(res, 500, {
@@ -324,7 +314,7 @@ export function createProxyServer({
           return;
         }
         const model = body && typeof body.model === 'string' ? body.model : '';
-        const selection = resolveModelSelection(model, routes, cpaConfig);
+        const selection = resolveRegistryModelSelection(model, registry);
         if (!selection.ok) {
           logger.info(`[codex-proxy] POST /v1/responses model=${model || '(空)'} -> ${selection.message} ${selection.status}`);
           sendJson(res, selection.status, {
@@ -333,9 +323,7 @@ export function createProxyServer({
           return;
         }
         try {
-          const proxy = await proxyForModel(
-            selection.provider === 'cpa' ? 'cpa' : selection.routeSlug,
-          );
+          const proxy = await proxyForModel(selection.routeSlug, selection.route.network);
           forwardToUpstream(
             req,
             res,
@@ -348,7 +336,7 @@ export function createProxyServer({
             proxy.mode,
             env,
             historyMonitor,
-            selection.provider,
+            selection.provider_id,
           );
         } catch (proxyError) {
           logger.error(`[codex-proxy] 系统代理解析失败 model=${model} err=${proxyError.message}`);
@@ -369,7 +357,7 @@ export function createProxyServer({
           return;
         }
         const model = body && typeof body.model === 'string' ? body.model : '';
-        const selection = resolveModelSelection(model, routes, cpaConfig);
+        const selection = resolveRegistryModelSelection(model, registry);
         if (!selection.ok) {
           logger.info(`[codex-proxy] POST /v1/responses/compact model=${model || '(空)'} -> ${selection.message} ${selection.status}`);
           sendJson(res, selection.status, {
@@ -377,22 +365,18 @@ export function createProxyServer({
           });
           return;
         }
-        const isCpa = selection.provider === 'cpa';
-        forwardCompactWithFallback({
+        forwardCompact({
           req,
           res,
           body,
           slug: model,
           route: selection.route,
-          fallbackSlug: isCpa ? undefined : compactFallbackSlug,
-          fallbackRoute: isCpa ? undefined : { ...routes[compactFallbackSlug], provider: 'direct' },
           secrets,
           logger,
-          proxyForModel: isCpa
-            ? async () => proxyForModel('cpa')
-            : async (attemptSlug) => proxyForModel(
-              attemptSlug === model ? selection.routeSlug : attemptSlug,
-            ),
+          proxyForModel: async (attemptSlug, attemptRoute) => proxyForModel(
+            attemptSlug === model ? selection.routeSlug : attemptSlug,
+            attemptRoute?.network,
+          ),
           env,
           historyMonitor,
         });
@@ -402,6 +386,8 @@ export function createProxyServer({
 
     sendJson(res, 404, { error: { type: 'not_found', message: '未找到该路径' } });
   });
+  server.providerRegistry = registry;
+  server.directModels = directModels;
   return server;
 }
 
@@ -544,98 +530,78 @@ function readJsonBody(req, callback) {
   req.on('error', (err) => finish(err));
 }
 
-export function resolveModelSelection(model, routes, cpaConfig) {
-  if (model.startsWith('cpa/')) {
-    const upstreamModel = model.slice('cpa/'.length);
-    if (!upstreamModel) {
-      return invalidModel(model);
-    }
-    if (!cpaConfig.enabled) {
-      return {
-        ok: false,
-        status: 503,
-        errorType: 'upstream_unavailable',
-        message: 'CPA 未配置：请同时设置 CPA_BASE_URL 与 CPA_API_KEY',
-      };
-    }
-    return {
-      ok: true,
-      provider: 'cpa',
-      routeSlug: model,
-      route: {
-        upstream_base_url: cpaConfig.baseUrl,
-        upstream_model: upstreamModel,
-        auth_mode: 'api_key',
-        api_key_env: 'CPA_API_KEY',
-        reasoning_format: 'passthrough',
-        tool_output_format: 'passthrough',
-        provider: 'cpa',
-      },
-    };
+export function resolveModelSelection(model, registryOrRoutes) {
+  if (registryOrRoutes && typeof registryOrRoutes.getProviderByNamespace === 'function') {
+    return resolveRegistryModelSelection(model, registryOrRoutes);
   }
-
-  const explicitDirect = model.startsWith('direct/');
-  const routeSlug = explicitDirect ? model.slice('direct/'.length) : model;
-  const route = routes[routeSlug];
-  if (!route) return invalidModel(model);
-  return {
-    ok: true,
-    provider: 'direct',
-    routeSlug,
-    route: { ...route, provider: 'direct' },
-  };
+  const registry = createProviderRegistry({
+    config: { models: registryOrRoutes || {} },
+    localConfig: { providers: {} },
+    env: {},
+    secrets: {},
+  });
+  return resolveRegistryModelSelection(model, registry);
 }
 
-function invalidModel(model) {
-  return {
-    ok: false,
-    status: 400,
-    errorType: 'invalid_request_error',
-    message: `未知模型：${model}`,
-  };
-}
-
-async function sendModelList(res, routes, catalogModels, cpaCatalog) {
-  const cpaModels = await cpaCatalog.getModels();
-  const staticData = Object.keys(routes).map((slug) => ({
+async function sendModelList(res, registry, catalogModels) {
+  const dynamicModels = await registry.discoverAll();
+  const legacySlugs = registry.knownLegacySlugs();
+  const staticData = legacySlugs.map((slug) => ({
     id: slug,
     object: 'model',
     owned_by: 'unified',
   }));
-  const baseCatalog = catalogModels || Object.keys(routes).map((slug) => ({
+  const baseCatalog = catalogModels || legacySlugs.map((slug) => ({
     slug,
     display_name: slug,
   }));
-  const cpaCatalogModels = buildCpaCatalogModels(cpaModels, baseCatalog, baseCatalog.length);
+  const dynamicCatalogModels = buildProviderCatalogModels(
+    dynamicModels,
+    baseCatalog,
+    baseCatalog.length,
+    registry.config,
+  );
+  const canonicalData = registry.config.expose_canonical_models === true
+    ? registry.knownCanonicalModels()
+      .filter((slug) => !slug.startsWith('direct/'))
+      .filter((slug) => !staticData.some((model) => model.id === slug))
+      .map((slug) => ({ id: slug, object: 'model', owned_by: 'unified' }))
+    : [];
+  const canonicalCatalog = registry.config.expose_canonical_models === true
+    ? buildCanonicalCatalogModels(registry, baseCatalog, baseCatalog.length + dynamicCatalogModels.length)
+    : [];
   sendJson(res, 200, {
     object: 'list',
-    models: [...baseCatalog, ...cpaCatalogModels],
-    data: [...staticData, ...cpaModels],
+    models: [...baseCatalog, ...canonicalCatalog, ...dynamicCatalogModels],
+    data: [...staticData, ...canonicalData, ...dynamicModels],
   });
 }
 
-export function buildCpaCatalogModels(cpaModels, baseCatalog, priorityStart = 0) {
+export function buildProviderCatalogModels(dynamicModels, baseCatalog, priorityStart = 0, config = {}) {
   const templates = new Map(
     (Array.isArray(baseCatalog) ? baseCatalog : [])
       .filter((model) => model && typeof model.slug === 'string')
       .map((model) => [model.slug, model]),
   );
-  const defaultTemplate = templates.get(DEFAULT_CPA_TEMPLATE_SLUG)
-    || templates.values().next().value
-    || {};
+  const defaultTemplate = config.dynamic_model_template
+    ? templates.get(config.dynamic_model_template) || {}
+    : {};
 
-  return (Array.isArray(cpaModels) ? cpaModels : []).map((model, index) => {
-    const upstreamSlug = model.id.slice('cpa/'.length);
+  const metadataMap = config.metadata_model_map || {};
+  return (Array.isArray(dynamicModels) ? dynamicModels : []).map((model, index) => {
+    const providerId = model.provider_id || model.id.split('/')[0] || 'provider';
+    const upstreamSlug = model.upstream_model || model.id.slice(`${providerId}/`.length);
     const templateSlug = templates.has(upstreamSlug)
       ? upstreamSlug
-      : CPA_MODEL_TEMPLATE_SLUGS.get(upstreamSlug);
+      : metadataMap[model.id] || metadataMap[upstreamSlug];
     const template = templates.get(templateSlug) || defaultTemplate;
+    const providerLabel = model.provider_label || (providerId === 'cpa' ? 'CPA' : providerId);
     return {
-      ...defaultCpaModelInfo(priorityStart + index + 1),
+      ...defaultModelInfo(priorityStart + index + 1),
       ...template,
       slug: model.id,
-      display_name: `CPA · ${upstreamSlug}`,
-      description: `CLIProxyAPI 动态模型 · ${upstreamSlug}`,
+      display_name: `${providerLabel} · ${upstreamSlug}`,
+      description: `${model.description || `${providerLabel} 动态模型`} · ${upstreamSlug}`,
       priority: priorityStart + index + 1,
       additional_speed_tiers: [],
       service_tiers: [],
@@ -646,7 +612,31 @@ export function buildCpaCatalogModels(cpaModels, baseCatalog, priorityStart = 0)
   });
 }
 
-function defaultCpaModelInfo(priority) {
+function buildCanonicalCatalogModels(registry, baseCatalog, priorityStart) {
+  const templates = new Map(
+    (Array.isArray(baseCatalog) ? baseCatalog : [])
+      .filter((model) => model && typeof model.slug === 'string')
+      .map((model) => [model.slug, model]),
+  );
+  const defaultTemplate = registry.config.dynamic_model_template
+    ? templates.get(registry.config.dynamic_model_template) || {}
+    : {};
+  return registry.knownCanonicalModels()
+    .filter((slug) => !slug.startsWith('direct/'))
+    .map((slug, index) => {
+      const modelName = slug.slice(slug.indexOf('/') + 1);
+      const template = templates.get(modelName) || defaultTemplate;
+      return {
+        ...defaultModelInfo(priorityStart + index + 1),
+        ...template,
+        slug,
+        display_name: slug,
+        priority: priorityStart + index + 1,
+      };
+    });
+}
+
+function defaultModelInfo(priority) {
   return {
     slug: '',
     display_name: '',
@@ -678,13 +668,13 @@ function defaultCpaModelInfo(priority) {
     web_search_tool_type: 'text_and_image',
     truncation_policy: { mode: 'tokens', limit: 10000 },
     supports_parallel_tool_calls: true,
-    supports_image_detail_original: true,
+    supports_image_detail_original: false,
     context_window: 128000,
     max_context_window: 128000,
     effective_context_window_percent: 95,
     experimental_supported_tools: [],
-    input_modalities: ['text', 'image'],
-    supports_search_tool: true,
+    input_modalities: ['text'],
+    supports_search_tool: false,
     use_responses_lite: true,
     tool_mode: 'code_mode_only',
     multi_agent_version: 'v2',
@@ -832,8 +822,10 @@ function forwardToUpstream(
       });
       return;
     }
+  } else if (authMode === 'none') {
+    upstreamAuthorization = '';
   } else {
-    const apiKey = env[route.api_key_env] || secrets[route.api_key_env];
+    const apiKey = route.api_key || env[route.api_key_env] || secrets[route.api_key_env];
     if (!apiKey) {
       recordMonitorResult({
         status: 500,
@@ -887,14 +879,14 @@ function forwardToUpstream(
       lower === 'authorization' ||
       lower === 'x-proxy-access-token' ||
       lower === 'content-length' ||
-      (provider === 'cpa' && CPA_CLIENT_CREDENTIAL_HEADERS.has(lower)) ||
+      (route.strip_client_credentials === true && CLIENT_CREDENTIAL_HEADERS.has(lower)) ||
       HOP_BY_HOP_HEADERS.has(lower)
     ) {
       continue;
     }
     headers[key] = value;
   }
-  headers.authorization = upstreamAuthorization;
+  if (upstreamAuthorization) headers.authorization = upstreamAuthorization;
   headers['content-length'] = Buffer.byteLength(upstreamBody);
   if (!headers['content-type']) headers['content-type'] = 'application/json';
   if (!headers.accept) headers.accept = 'application/json';
@@ -945,7 +937,8 @@ function forwardToUpstream(
     res.writeHead(status, outHeaders);
     upRes.pipe(res);
   });
-  outgoing.setTimeout(UPSTREAM_TIMEOUT_MS, () => {
+  const timeoutMs = Number(route.upstream_timeout_ms ?? route.timeout_ms ?? UPSTREAM_TIMEOUT_MS);
+  outgoing.setTimeout(Number.isInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : UPSTREAM_TIMEOUT_MS, () => {
     outgoing.destroy(new Error('上游响应超时'));
   });
   outgoing.on('error', (err) => {
@@ -980,26 +973,16 @@ function isMain() {
 }
 
 if (isMain()) {
-  const env = process.env;
+  const env = loadRuntimeEnv();
   let config;
   let secrets;
-  let cpaConfig;
+  let localConfig;
   try {
-    config = loadConfig();
-    secrets = loadSecrets();
-    cpaConfig = loadCpaConfig(env, secrets);
+    config = loadConfig(env.PROXY_CONFIG_FILE || DEFAULT_CONFIG_FILE);
+    secrets = loadSecrets(env.PROXY_SECRETS_FILE || DEFAULT_SECRETS_FILE);
+    localConfig = loadProviderFile(env.PROVIDERS_CONFIG_FILE || DEFAULT_PROVIDERS_FILE);
   } catch (err) {
     console.error(`[codex-proxy] 启动失败：${err.message}`);
-    process.exit(1);
-  }
-  const missingKeys = [...new Set(
-    Object.values(config.models)
-      .filter((route) => (route.auth_mode || 'api_key') !== 'openai_passthrough')
-      .filter((route) => !(env[route.api_key_env] || secrets[route.api_key_env]))
-      .map((route) => route.api_key_env),
-  )];
-  if (missingKeys.length > 0) {
-    console.error(`[codex-proxy] 启动失败：缺少密钥（${missingKeys.join('、')}），请在 proxy-secrets.env 或环境变量中提供`);
     process.exit(1);
   }
   const host = env.HOST || config.host || '127.0.0.1';
@@ -1008,8 +991,17 @@ if (isMain()) {
   let directModels;
   let server;
   try {
-    directModels = parseDirectModels(env.DIRECT_MODELS, config.models);
-    server = createProxyServer({ config, secrets, env, directModels });
+    server = createProxyServer({
+      config,
+      secrets,
+      env,
+      localConfig,
+      validateProviderCredentials: true,
+    });
+    directModels = server.directModels || parseDirectModels(env.DIRECT_MODELS, new Set([
+      ...Object.keys(config.models || {}),
+      ...Object.keys(config.aliases || {}),
+    ]));
   } catch (err) {
     console.error(`[codex-proxy] 启动失败：${err.message}`);
     process.exit(1);
@@ -1023,11 +1015,7 @@ if (isMain()) {
     writePidFile(pidFile, process.pid);
     console.log(`[codex-proxy] 已启动：http://${host}:${port}`);
     console.log(`[codex-proxy] 模型路由：${Object.keys(config.models).join('、')}`);
-    console.log(
-      cpaConfig.enabled
-        ? `[codex-proxy] CPA：已启用，地址=${new URL(cpaConfig.baseUrl).host}，模型缓存=${cpaConfig.cacheTtlMs / 1000} 秒`
-        : '[codex-proxy] CPA：未启用',
-    );
+    console.log(`[codex-proxy] Provider：${server.providerRegistry?.listProviders().filter((provider) => provider.enabled).map((provider) => provider.id).join('、') || '(空)'}`);
     const configuredProxy = env.PROXY_URL !== undefined
       ? String(env.PROXY_URL).trim()
       : String(config.proxy || '').trim();

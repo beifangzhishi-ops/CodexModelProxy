@@ -1,4 +1,4 @@
-// Responses 压缩请求转发：先用请求模型，失败后仅重试一次后备模型。
+// Responses 压缩请求转发：只请求当前选中的模型。
 import http from 'node:http';
 import https from 'node:https';
 import { normalizeResponsesBody } from './history-normalize.mjs';
@@ -16,7 +16,7 @@ const HOP_BY_HOP_HEADERS = new Set([
   'transfer-encoding',
   'upgrade',
 ]);
-const CPA_CLIENT_CREDENTIAL_HEADERS = new Set([
+const CLIENT_CREDENTIAL_HEADERS = new Set([
   'chatgpt-account-id',
   'cookie',
   'openai-organization',
@@ -24,14 +24,12 @@ const CPA_CLIENT_CREDENTIAL_HEADERS = new Set([
   'x-api-key',
 ]);
 
-export async function forwardCompactWithFallback({
+export async function forwardCompact({
   req,
   res,
   body,
   slug,
   route,
-  fallbackSlug,
-  fallbackRoute,
   secrets,
   logger,
   proxyUrl,
@@ -59,7 +57,7 @@ export async function forwardCompactWithFallback({
   const attempt = async (attemptSlug, attemptRoute, selectedProxy) => {
     const startedAt = Date.now();
     const currentAttempt = ++attemptNumber;
-    const attemptProxy = selectedProxy || await selectProxy(attemptSlug);
+    const attemptProxy = selectedProxy || await selectProxy(attemptSlug, attemptRoute);
     const attemptProxyUrl = attemptProxy.url;
     lastNetworkMode = attemptProxy.mode;
     const normalization = normalizeResponsesBody(
@@ -152,7 +150,7 @@ export async function forwardCompactWithFallback({
   };
 
   try {
-    firstProxy = await selectProxy(slug);
+    firstProxy = await selectProxy(slug, route);
     lastNetworkMode = firstProxy.mode;
     monitorRequestId = historyMonitor?.startRequest({
       endpoint: '/v1/responses/compact',
@@ -161,17 +159,9 @@ export async function forwardCompactWithFallback({
       network: firstProxy.mode,
       body,
     });
-    let result = await attempt(slug, route, firstProxy);
+    const result = await attempt(slug, route, firstProxy);
     logAttempt(logger, slug, result);
     if (clientClosed) return;
-
-    if (!isSuccessful(result) && fallbackRoute && fallbackSlug !== slug) {
-      const reason = result.error ? result.error.message : `HTTP ${result.status}`;
-      logger.warn(`[codex-proxy] 压缩请求 model=${slug} 失败（${reason}），改用 ${fallbackSlug}`);
-      result = await attempt(fallbackSlug, fallbackRoute);
-      logAttempt(logger, fallbackSlug, result);
-      if (clientClosed) return;
-    }
 
     if (result.error) {
       sendJson(res, result.status || 502, {
@@ -186,8 +176,8 @@ export async function forwardCompactWithFallback({
       historyMonitor?.recordResult({
         requestId: monitorRequestId,
         endpoint: '/v1/responses/compact',
-        model: attemptNumber > 1 ? fallbackSlug : slug,
-        upstreamModel: attemptNumber > 1 ? fallbackRoute?.upstream_model : route.upstream_model,
+        model: slug,
+        upstreamModel: route.upstream_model,
         network: lastNetworkMode,
         attempt: attemptNumber || 1,
         status: 502,
@@ -221,8 +211,10 @@ function requestBufferedCompact({ req, body, slug, route, secrets, proxyUrl, env
         });
         return;
       }
+    } else if (authMode === 'none') {
+      upstreamAuthorization = '';
     } else {
-      const apiKey = env[route.api_key_env] || secrets[route.api_key_env];
+      const apiKey = route.api_key || env[route.api_key_env] || secrets[route.api_key_env];
       if (!apiKey) {
         resolve({
           slug,
@@ -262,8 +254,8 @@ function requestBufferedCompact({ req, body, slug, route, secrets, proxyUrl, env
     const lib = upstreamUrl.protocol === 'https:' ? https : http;
     const agent = upstreamUrl.protocol === 'https:' && proxyUrl ? createProxyAgent(proxyUrl) : undefined;
     const upstreamBody = JSON.stringify({ ...body, model: route.upstream_model });
-    const headers = copyRequestHeaders(req.headers, route.provider || 'direct');
-    headers.authorization = upstreamAuthorization;
+    const headers = copyRequestHeaders(req.headers, route);
+    if (upstreamAuthorization) headers.authorization = upstreamAuthorization;
     headers['content-length'] = Buffer.byteLength(upstreamBody);
     if (!headers['content-type']) headers['content-type'] = 'application/json';
     if (!headers.accept) headers.accept = 'application/json';
@@ -301,7 +293,8 @@ function requestBufferedCompact({ req, body, slug, route, secrets, proxyUrl, env
       upstreamResponse.on('error', (err) => finish({ status: 502, error: err }));
     });
     onRequest(outgoing);
-    outgoing.setTimeout(UPSTREAM_TIMEOUT_MS, () => {
+    const timeoutMs = Number(route.upstream_timeout_ms ?? route.timeout_ms ?? UPSTREAM_TIMEOUT_MS);
+    outgoing.setTimeout(Number.isInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : UPSTREAM_TIMEOUT_MS, () => {
       outgoing.destroy(new Error('上游响应超时'));
     });
     outgoing.on('error', (err) => finish({ status: 502, error: err }));
@@ -309,7 +302,7 @@ function requestBufferedCompact({ req, body, slug, route, secrets, proxyUrl, env
   });
 }
 
-function copyRequestHeaders(sourceHeaders, provider) {
+function copyRequestHeaders(sourceHeaders, route = {}) {
   const headers = {};
   for (const [key, value] of Object.entries(sourceHeaders)) {
     const lower = key.toLowerCase();
@@ -318,7 +311,7 @@ function copyRequestHeaders(sourceHeaders, provider) {
       lower === 'authorization' ||
       lower === 'x-proxy-access-token' ||
       lower === 'content-length' ||
-      (provider === 'cpa' && CPA_CLIENT_CREDENTIAL_HEADERS.has(lower)) ||
+      (route.strip_client_credentials === true && CLIENT_CREDENTIAL_HEADERS.has(lower)) ||
       HOP_BY_HOP_HEADERS.has(lower)
     ) {
       continue;
@@ -330,10 +323,6 @@ function copyRequestHeaders(sourceHeaders, provider) {
 
 function firstHeader(value) {
   return Array.isArray(value) ? (value[0] || '') : (value || '');
-}
-
-function isSuccessful(result) {
-  return !result.error && result.status >= 200 && result.status < 300;
 }
 
 function logAttempt(logger, slug, result) {
