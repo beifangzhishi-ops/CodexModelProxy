@@ -158,8 +158,11 @@ export function buildProviderRoute({
     upstream_base_url: modelSpec.upstream_base_url || provider.base_url,
     upstream_model: modelSpec.upstream_model || modelName,
     auth_mode: modelSpec.auth_mode || provider.auth_mode,
-    api_key: modelSpec.api_key || provider.api_key || '',
-    api_key_env: modelSpec.api_key_env || provider.api_key_env || '',
+    api_key: String(modelSpec.api_key || '').trim(),
+    api_key_env: typeof modelSpec.api_key_env === 'string'
+      ? modelSpec.api_key_env.trim()
+      : '',
+    provider_api_key: String(provider.api_key || '').trim(),
     network: modelSpec.network || provider.network,
     strip_client_credentials: modelSpec.strip_client_credentials === undefined
       ? provider.strip_client_credentials
@@ -190,8 +193,9 @@ export function buildLegacyRoute(route, provider, publicModel, canonical) {
     provider: provider?.id || route.provider || route.provider_id || 'legacy',
     public_model: publicModel,
     canonical_model: canonical,
-    api_key: route.api_key || provider?.api_key || '',
-    api_key_env: route.api_key_env || provider?.api_key_env || '',
+    api_key: String(route.api_key || '').trim(),
+    api_key_env: String(route.api_key_env || provider?.api_key_env || '').trim(),
+    provider_api_key: String(provider?.api_key || '').trim(),
     network: route.network || provider?.network,
     strip_client_credentials: route.strip_client_credentials === undefined
       ? Boolean(provider?.strip_client_credentials)

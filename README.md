@@ -40,6 +40,8 @@ GLM-5.3 / GLM-5.3-Flash 使用 Z.AI 的 GLM Coding Plan 专用 Responses 端点�
 - 三个 GPT 路由把 Codex 的 ChatGPT 登录认证（`Authorization`）原样转发至 Backend API。
 - OC 与直连 DeepSeek 路由丢弃传入的 ChatGPT `Authorization`，分别注入 `OPENCODE_API_KEY` 与 `DEEPSEEK_API_KEY`；ZAI 路由同样丢弃传入认证并注入 `ZAI_API_KEY`。
 - `api_key` Provider 丢弃调用方的 `Authorization`、ChatGPT 账号头、Cookie 与 API Key 头，只注入该 Provider 自己的 key；`openai_passthrough` Provider 才透传调用方 Authorization。
+- Provider 可以暂时设为 `enabled: false`：保留的 alias 请求会返回 503，但该 Provider 的旧 slug 和 canonical 模型不会出现在 `/v1/models`；重新启用后无需修改 alias。
+- 模型级 `api_key`、`api_key_env`、兼容 profile、网络策略和 timeout 会在启动时校验；模型 key 的选择顺序是显式 `api_key`、模型级环境变量/密钥文件、Provider 默认 key。
 - 未知静态模型、缺少登录认证、缺少上游密钥时不访问上游，直接返回错误；动态 Provider 的任意非空 canonical 模型由对应上游判断是否存在。
 - 日志记录 provider、模型、上游主机、状态码与耗时，不记录提示词、响应正文、请求头与 API 密钥。
 - 上游返回 4xx/5xx 时，代理额外写一条脱敏诊断日志：提取错误 `message`/`code`/provider 原始消息，统计请求输入类型、工具类型和孤立调用数；不记录提示词、工具参数或密钥。

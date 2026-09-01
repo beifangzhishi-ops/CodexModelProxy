@@ -28,6 +28,7 @@ import {
   loadProviderFile,
   loadRuntimeEnv,
   parseEnvFile,
+  resolveRouteApiKey,
 } from './provider-registry.mjs';
 import { resolveModelSelection as resolveRegistryModelSelection } from './model-resolver.mjs';
 
@@ -314,7 +315,16 @@ export function createProxyServer({
           return;
         }
         const model = body && typeof body.model === 'string' ? body.model : '';
-        const selection = resolveRegistryModelSelection(model, registry);
+        let selection;
+        try {
+          selection = resolveRegistryModelSelection(model, registry);
+        } catch (err) {
+          logger.error(`[codex-proxy] 模型路由解析异常 model=${model || '(空)'} err=${err.message}`);
+          sendJson(res, 500, {
+            error: { type: 'server_error', message: '模型路由配置错误' },
+          });
+          return;
+        }
         if (!selection.ok) {
           logger.info(`[codex-proxy] POST /v1/responses model=${model || '(空)'} -> ${selection.message} ${selection.status}`);
           sendJson(res, selection.status, {
@@ -357,7 +367,16 @@ export function createProxyServer({
           return;
         }
         const model = body && typeof body.model === 'string' ? body.model : '';
-        const selection = resolveRegistryModelSelection(model, registry);
+        let selection;
+        try {
+          selection = resolveRegistryModelSelection(model, registry);
+        } catch (err) {
+          logger.error(`[codex-proxy] 模型路由解析异常 model=${model || '(空)'} err=${err.message}`);
+          sendJson(res, 500, {
+            error: { type: 'server_error', message: '模型路由配置错误' },
+          });
+          return;
+        }
         if (!selection.ok) {
           logger.info(`[codex-proxy] POST /v1/responses/compact model=${model || '(空)'} -> ${selection.message} ${selection.status}`);
           sendJson(res, selection.status, {
@@ -545,20 +564,22 @@ export function resolveModelSelection(model, registryOrRoutes) {
 
 async function sendModelList(res, registry, catalogModels) {
   const dynamicModels = await registry.discoverAll();
-  const legacySlugs = registry.knownLegacySlugs();
+  const legacySlugs = registry.visibleLegacySlugs();
   const staticData = legacySlugs.map((slug) => ({
     id: slug,
     object: 'model',
     owned_by: 'unified',
   }));
-  const baseCatalog = catalogModels || legacySlugs.map((slug) => ({
+  const templateCatalog = catalogModels || registry.knownLegacySlugs().map((slug) => ({
     slug,
     display_name: slug,
   }));
+  const visibleLegacySet = new Set(legacySlugs);
+  const visibleBaseCatalog = templateCatalog.filter((model) => visibleLegacySet.has(model.slug));
   const dynamicCatalogModels = buildProviderCatalogModels(
     dynamicModels,
-    baseCatalog,
-    baseCatalog.length,
+    templateCatalog,
+    visibleBaseCatalog.length,
     registry.config,
   );
   const canonicalData = registry.config.expose_canonical_models === true
@@ -568,11 +589,15 @@ async function sendModelList(res, registry, catalogModels) {
       .map((slug) => ({ id: slug, object: 'model', owned_by: 'unified' }))
     : [];
   const canonicalCatalog = registry.config.expose_canonical_models === true
-    ? buildCanonicalCatalogModels(registry, baseCatalog, baseCatalog.length + dynamicCatalogModels.length)
+    ? buildCanonicalCatalogModels(
+      registry,
+      templateCatalog,
+      visibleBaseCatalog.length + dynamicCatalogModels.length,
+    )
     : [];
   sendJson(res, 200, {
     object: 'list',
-    models: [...baseCatalog, ...canonicalCatalog, ...dynamicCatalogModels],
+    models: [...visibleBaseCatalog, ...canonicalCatalog, ...dynamicCatalogModels],
     data: [...staticData, ...canonicalData, ...dynamicModels],
   });
 }
@@ -825,7 +850,7 @@ function forwardToUpstream(
   } else if (authMode === 'none') {
     upstreamAuthorization = '';
   } else {
-    const apiKey = route.api_key || env[route.api_key_env] || secrets[route.api_key_env];
+    const apiKey = resolveRouteApiKey(route, env, secrets);
     if (!apiKey) {
       recordMonitorResult({
         status: 500,

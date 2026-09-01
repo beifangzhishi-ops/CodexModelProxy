@@ -98,6 +98,19 @@ export function resolveProviderApiKey(provider, env = {}, secrets = {}) {
   return '';
 }
 
+export function resolveRouteApiKey(route, env = {}, secrets = {}) {
+  const explicit = String(route?.api_key || '').trim();
+  if (explicit) return explicit;
+
+  const envName = String(route?.api_key_env || '').trim();
+  if (envName) {
+    const value = env[envName] ?? secrets[envName];
+    if (value !== undefined && String(value).trim()) return String(value).trim();
+  }
+
+  return String(route?.provider_api_key || '').trim();
+}
+
 export function validateProvider(providerId, raw, {
   resolvedApiKey = '',
   allowMissingBaseUrl = false,
@@ -183,7 +196,7 @@ export function validateProvider(providerId, raw, {
       ? authMode === 'api_key'
       : Boolean(raw.strip_client_credentials),
     models: normalizeModelMap(raw.models),
-    model_overrides: normalizeModelMap(raw.model_overrides),
+    model_overrides: normalizeModelOverrides(raw.model_overrides, id),
     model_compatibility: normalizePatternOverrides(raw.model_compatibility),
   };
 }
@@ -367,6 +380,12 @@ export function createProviderRegistry({
     knownLegacySlugs() {
       return [...legacyRoutes.keys()];
     },
+    visibleLegacySlugs() {
+      return [...legacyRoutes.keys()].filter((slug) => {
+        const providerId = legacy.routeProviders.get(slug);
+        return providers.get(providerId)?.enabled === true;
+      });
+    },
     knownCanonicalModels() {
       return [...staticModels.keys()];
     },
@@ -429,13 +448,24 @@ function inferProfileFromRoute(route) {
 
 function mergeProvider(base, override) {
   const result = { ...(base || {}), ...(override || {}) };
-  if (base?.models || override?.models) result.models = { ...(base?.models || {}), ...(override?.models || {}) };
-  if (base?.model_overrides || override?.model_overrides) {
-    result.model_overrides = { ...(base?.model_overrides || {}), ...(override?.model_overrides || {}) };
+  if (base?.models !== undefined || override?.models !== undefined) {
+    result.models = mergeModelMaps(base?.models, override?.models);
   }
-  if (base?.discovery || override?.discovery) result.discovery = { ...(base?.discovery || {}), ...(override?.discovery || {}) };
-  if (override?.model_compatibility) result.model_compatibility = override.model_compatibility;
+  if (base?.model_overrides !== undefined || override?.model_overrides !== undefined) {
+    result.model_overrides = mergeModelMaps(base?.model_overrides, override?.model_overrides);
+  }
+  if (base?.discovery !== undefined || override?.discovery !== undefined) {
+    result.discovery = { ...(base?.discovery || {}), ...(override?.discovery || {}) };
+  }
+  if (override?.model_compatibility !== undefined) result.model_compatibility = override.model_compatibility;
   return result;
+}
+
+function mergeModelMaps(baseValue, overrideValue) {
+  return {
+    ...normalizeModelMap(baseValue),
+    ...normalizeModelMap(overrideValue),
+  };
 }
 
 function normalizeNamespace(raw, providerId) {
@@ -480,19 +510,85 @@ function isModelMap(value) {
 
 function normalizeModelSpec(modelName, raw, providerId) {
   const spec = typeof raw === 'string' ? { upstream_model: raw } : { ...(raw || {}) };
+  const label = `Provider ${providerId} 模型 ${modelName}`;
+  validateModelSpecFields(spec, label);
   if (spec.enabled === false) return { ...spec, upstream_model: spec.upstream_model || modelName };
   const upstreamModel = String(spec.upstream_model || modelName).trim();
   if (!upstreamModel) throw new Error(`Provider ${providerId} 模型 ${modelName} 缺少 upstream_model`);
-  if (spec.compat_profile && !isValidCompatibilityProfile(spec.compat_profile)) {
-    throw new Error(`Provider ${providerId} 模型 ${modelName} 的 compat_profile 无效：${spec.compat_profile}`);
+  return { ...spec, upstream_model: upstreamModel };
+}
+
+function normalizeModelOverrides(value, providerId) {
+  const map = normalizeModelMap(value);
+  const result = {};
+  for (const [pattern, raw] of Object.entries(map)) {
+    const normalizedPattern = String(pattern).trim();
+    if (!normalizedPattern) {
+      throw new Error(`Provider ${providerId} 存在空 model override`);
+    }
+    const spec = typeof raw === 'string' ? { upstream_model: raw } : { ...(raw || {}) };
+    validateModelSpecFields(spec, `Provider ${providerId} model_overrides.${normalizedPattern}`);
+    result[normalizedPattern] = spec;
+  }
+  return result;
+}
+
+function validateModelSpecFields(spec, label) {
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+    throw new Error(`${label} 必须是对象`);
+  }
+  if (spec.enabled !== undefined && typeof spec.enabled !== 'boolean') {
+    throw new Error(`${label} enabled 必须是布尔值`);
+  }
+  if (spec.compat_profile !== undefined && !isValidCompatibilityProfile(spec.compat_profile)) {
+    throw new Error(`${label} compat_profile 无效：${spec.compat_profile}`);
   }
   if (spec.reasoning_format || spec.tool_output_format) {
     validateRouteCompatibility({
       reasoning_format: spec.reasoning_format || 'passthrough',
       tool_output_format: spec.tool_output_format || 'passthrough',
-    }, `Provider ${providerId} 模型 ${modelName}`);
+    }, label);
   }
-  return { ...spec, upstream_model: upstreamModel };
+  if (spec.auth_mode !== undefined && !SUPPORTED_AUTH_MODES.has(spec.auth_mode)) {
+    throw new Error(`${label} auth_mode 无效：${spec.auth_mode}`);
+  }
+  if (spec.network !== undefined && !['default', 'direct', 'system'].includes(spec.network)) {
+    throw new Error(`${label} network 无效：${spec.network}`);
+  }
+  for (const field of ['timeout_ms', 'upstream_timeout_ms']) {
+    if (spec[field] !== undefined) {
+      const value = Number(spec[field]);
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new Error(`${label} ${field} 必须是正整数`);
+      }
+    }
+  }
+  if (spec.api_key_env !== undefined && (typeof spec.api_key_env !== 'string' || !spec.api_key_env.trim())) {
+    throw new Error(`${label} api_key_env 必须是非空字符串`);
+  }
+  if (spec.upstream_model !== undefined && (typeof spec.upstream_model !== 'string' || !spec.upstream_model.trim())) {
+    throw new Error(`${label} upstream_model 必须是非空字符串`);
+  }
+  if (spec.upstream_base_url !== undefined) {
+    let parsed;
+    try {
+      parsed = new URL(spec.upstream_base_url);
+    } catch {
+      throw new Error(`${label} upstream_base_url 无效`);
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error(`${label} upstream_base_url 仅支持 http/https`);
+    }
+  }
+  if (
+    spec.strip_client_credentials !== undefined &&
+    typeof spec.strip_client_credentials !== 'boolean'
+  ) {
+    throw new Error(`${label} strip_client_credentials 必须是布尔值`);
+  }
+  if (spec.tool_schema_compat !== undefined && spec.tool_schema_compat !== 'muse') {
+    throw new Error(`${label} tool_schema_compat 无效：${spec.tool_schema_compat}`);
+  }
 }
 
 function normalizePatternOverrides(value) {
@@ -542,10 +638,15 @@ function validateModelTarget(target, providers, staticModels, alias) {
     throw new Error(`alias ${alias} 的目标无效：${target}`);
   }
   const namespace = target.slice(0, slash);
-  const providerId = [...providers.values()].find((provider) => provider.namespace === namespace)?.id;
-  if (!providerId) throw new Error(`alias ${alias} 指向未知 Provider 命名空间：${namespace}`);
-  const provider = providers.get(providerId);
-  if (!provider.enabled) throw new Error(`alias ${alias} 指向已禁用 Provider：${providerId}`);
+  const modelName = target.slice(slash + 1);
+  const provider = [...providers.values()].find((item) => item.namespace === namespace);
+  if (!provider) throw new Error(`alias ${alias} 指向未知 Provider 命名空间：${namespace}`);
+  if (!provider.enabled) {
+    if (!provider.discover_models && !Object.prototype.hasOwnProperty.call(provider.models || {}, modelName)) {
+      throw new Error(`alias ${alias} 指向未配置的静态模型：${target}`);
+    }
+    return;
+  }
   if (!provider.discover_models && !staticModels.has(target)) {
     throw new Error(`alias ${alias} 指向未配置的静态模型：${target}`);
   }

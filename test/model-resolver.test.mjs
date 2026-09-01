@@ -73,10 +73,10 @@ test('不同 Provider 的同名模型保留各自 URL、key 和网络策略', ()
   const oc = resolveModelSelection('oc/deepseek-v4-flash', r);
   const ds = resolveModelSelection('ds/deepseek-v4-flash', r);
   assert.equal(oc.route.upstream_base_url, 'https://opencode.example/v1');
-  assert.equal(oc.route.api_key, 'oc-key');
+  assert.equal(oc.route.provider_api_key, 'oc-key');
   assert.equal(oc.route.network, 'default');
   assert.equal(ds.route.upstream_base_url, 'https://deepseek.example/v1');
-  assert.equal(ds.route.api_key, 'ds-key');
+  assert.equal(ds.route.provider_api_key, 'ds-key');
   assert.equal(ds.route.network, 'direct');
 });
 
@@ -89,7 +89,7 @@ test('动态 Provider 接受未出现在缓存中的模型并按名称选择 pro
   assert.equal(gpt.route.compat_profile, 'openai');
   assert.equal(deepseek.route.compat_profile, 'deepseek');
   assert.equal(other.route.compat_profile, 'passthrough');
-  assert.equal(gpt.route.api_key, 'cpa-key');
+  assert.equal(gpt.route.provider_api_key, 'cpa-key');
 });
 
 test('未知 Provider、未知静态模型和空模型返回明确错误', () => {

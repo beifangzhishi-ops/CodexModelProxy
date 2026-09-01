@@ -36,7 +36,7 @@ test('有效 Provider、静态模型和别名可以构建并解析', () => {
   assert.equal(selection.provider_id, 'foo');
   assert.equal(selection.route.upstream_model, 'alpha');
   assert.equal(selection.route.auth_mode, 'api_key');
-  assert.equal(selection.route.api_key, 'foo-key');
+  assert.equal(selection.route.provider_api_key, 'foo-key');
 });
 
 test('disabled Provider 不要求 URL/key，也不会暴露静态模型', () => {
@@ -72,6 +72,52 @@ test('启用 Provider 缺少 URL 或 key 时严格拒绝', () => {
     () => createProviderRegistry({ config: { providers: { foo: validProvider({ api_key: '' }) } } }),
     /Provider foo 缺少 API key/,
   );
+});
+
+test('model_overrides 的路由字段在 Registry 构建期校验', () => {
+  const invalidCases = [
+    [{ compat_profile: 'missing' }, /model_overrides\.x-\* compat_profile 无效/],
+    [{ network: 'invalid' }, /model_overrides\.x-\* network 无效/],
+    [{ timeout_ms: 0 }, /model_overrides\.x-\* timeout_ms 必须是正整数/],
+    [{ reasoning_format: 'invalid' }, /model_overrides\.x-\* 的 reasoning_format 无效/],
+    [{ upstream_base_url: 'ftp://foo.example/v1' }, /model_overrides\.x-\* upstream_base_url 仅支持 http\/https/],
+  ];
+  for (const [spec, error] of invalidCases) {
+    assert.throws(
+      () => createProviderRegistry({ config: {
+        providers: { foo: validProvider({ model_overrides: { 'x-*': spec } }) },
+      } }),
+      error,
+    );
+  }
+});
+
+test('数组形式 models 和 model_overrides 合并后仍按名称解析', () => {
+  const registry = createProviderRegistry({
+    config: {
+      providers: {
+        foo: validProvider({
+          models: ['alpha', 'beta'],
+          model_overrides: [{ name: 'gpt-*', compat_profile: 'openai' }],
+        }),
+      },
+    },
+    localConfig: {
+      providers: {
+        foo: {
+          models: [{ name: 'gamma' }],
+          model_overrides: [{ name: 'claude-*', network: 'direct' }],
+        },
+      },
+    },
+  });
+  assert.deepEqual(registry.knownCanonicalModels().sort(), ['foo/alpha', 'foo/beta', 'foo/gamma']);
+  assert.deepEqual(Object.keys(registry.getProvider('foo').models).sort(), ['alpha', 'beta', 'gamma']);
+  assert.deepEqual(Object.keys(registry.getProvider('foo').model_overrides).sort(), ['claude-*', 'gpt-*']);
+  assert.equal(registry.getProvider('foo').models[0], undefined);
+  assert.equal(registry.getProvider('foo').model_overrides[0], undefined);
+  assert.equal(registry.getProvider('foo').model_overrides['gpt-*'].upstream_model, undefined);
+  assert.equal(resolveModelSelection('foo/gamma', registry).route.upstream_model, 'gamma');
 });
 
 test('Provider protocol、profile、namespace 和保留 id 校验', () => {

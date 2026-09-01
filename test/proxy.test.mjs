@@ -13,6 +13,7 @@ import {
   parseDirectModels,
   resolveProxyUrl,
 } from '../server.mjs';
+import { resolveModelSelection } from '../model-resolver.mjs';
 
 const MODEL_SLUGS = [
   'gpt-5.6-sol',
@@ -226,7 +227,7 @@ function startProxy(
   env = {},
   logger = silentLogger,
   systemProxyResolver = async () => ({ url: '', mode: 'direct' }),
-  cpaModelFetcher,
+  discoveryFetchModels,
 ) {
   const server = createProxyServer({
     config,
@@ -234,7 +235,7 @@ function startProxy(
     logger,
     env,
     systemProxyResolver,
-    cpaModelFetcher,
+    discoveryFetchModels,
   });
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
@@ -272,7 +273,7 @@ async function withServers(fn, {
   env = {},
   logger = silentLogger,
   systemProxyResolver,
-  cpaModelFetcher,
+  discoveryFetchModels,
 } = {}) {
   const mock = await startMockUpstream();
   const proxyEnv = {
@@ -285,13 +286,58 @@ async function withServers(fn, {
     proxyEnv,
     logger,
     systemProxyResolver,
-    cpaModelFetcher,
+    discoveryFetchModels,
   );
   try {
     await fn(mock, proxy, logger);
   } finally {
     await closeServers(proxy.server, mock.server);
   }
+}
+
+async function withCustomServers(configFactory, {
+  secrets = testSecrets(),
+  env = {},
+  logger = silentLogger,
+  systemProxyResolver = async () => ({ url: '', mode: 'direct' }),
+  discoveryFetchModels,
+} = {}, fn) {
+  const mock = await startMockUpstream();
+  const config = typeof configFactory === 'function' ? configFactory(mock.baseUrl) : configFactory;
+  const proxy = await startProxy(
+    config,
+    secrets,
+    env,
+    logger,
+    systemProxyResolver,
+    discoveryFetchModels,
+  );
+  try {
+    await fn(mock, proxy, logger);
+  } finally {
+    await closeServers(proxy.server, mock.server);
+  }
+}
+
+function keyPriorityConfig(baseUrl) {
+  return {
+    providers: {
+      foo: {
+        base_url: baseUrl,
+        api_key: 'provider-key',
+        api_key_env: 'PROVIDER_KEY',
+        auth_mode: 'api_key',
+        protocol: 'responses',
+        model_prefix: 'foo/',
+        compat_profile: 'passthrough',
+        models: {
+          'env-key': { api_key_env: 'MODEL_KEY' },
+          'explicit-key': { api_key: 'provider-model-key', api_key_env: 'MODEL_KEY' },
+          'fallback-key': { api_key_env: 'MISSING_MODEL_KEY' },
+        },
+      },
+    },
+  };
 }
 
 test('健康检查与模型列表只展示真实静态通道，GLM-5.3 能力保持不变', async () => {
@@ -315,6 +361,74 @@ test('健康检查与模型列表只展示真实静态通道，GLM-5.3 能力保
     const imageModels = modelsJson.models.filter((model) => model.slug !== 'glm-5.3');
     assert.ok(imageModels.every((model) => model.input_modalities.includes('image')));
     assert.ok(imageModels.every((model) => model.supports_image_detail_original === true));
+    assert.equal(mock.seen.length, 0);
+  });
+});
+
+test('disabled Provider 保留 alias 的 503 语义且不出现在模型目录', async () => {
+  await withCustomServers((baseUrl) => ({
+    models: {
+      'deepseek-v4-flash': {
+        provider_id: 'opencode',
+        upstream_base_url: baseUrl,
+        upstream_model: 'deepseek-v4-flash',
+        auth_mode: 'api_key',
+        api_key_env: 'OPENCODE_API_KEY',
+        reasoning_format: 'deepseek_plaintext',
+        tool_output_format: 'json_string',
+      },
+    },
+    providers: {
+      opencode: {
+        enabled: false,
+        base_url: baseUrl,
+        auth_mode: 'api_key',
+        protocol: 'responses',
+        model_prefix: 'oc/',
+        compat_profile: 'deepseek',
+        models: { 'deepseek-v4-flash': {} },
+      },
+      cpa: {
+        enabled: true,
+        base_url: baseUrl,
+        api_key: 'cpa-key',
+        auth_mode: 'api_key',
+        protocol: 'responses',
+        discover_models: true,
+        model_prefix: 'cpa/',
+        compat_profile: 'openai-auto',
+      },
+    },
+    aliases: { 'deepseek-v4-flash': 'oc/deepseek-v4-flash' },
+    metadata_model_map: { 'gpt-current': 'gpt-5.6-sol' },
+    catalog: {
+      models: [
+        { slug: 'deepseek-v4-flash', display_name: 'OC disabled' },
+        {
+          slug: 'gpt-5.6-sol',
+          display_name: 'GPT template',
+          input_modalities: ['text', 'image'],
+          supports_image_detail_original: true,
+        },
+      ],
+    },
+  }), {
+    discoveryFetchModels: async () => ({ data: [{ id: 'gpt-current' }] }),
+  }, async (mock, proxy) => {
+    const aliasSelection = resolveModelSelection('deepseek-v4-flash', proxy.server.providerRegistry);
+    const canonicalSelection = resolveModelSelection('oc/deepseek-v4-flash', proxy.server.providerRegistry);
+    assert.equal(aliasSelection.status, 503);
+    assert.equal(canonicalSelection.status, 503);
+
+    const response = await fetch(`${proxy.baseUrl}/v1/models`);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.data.map((model) => model.id), ['cpa/gpt-current']);
+    assert.ok(payload.models.every((model) => model.slug !== 'deepseek-v4-flash'));
+    assert.ok(payload.models.every((model) => model.slug !== 'oc/deepseek-v4-flash'));
+    const dynamic = payload.models.find((model) => model.slug === 'cpa/gpt-current');
+    assert.deepEqual(dynamic.input_modalities, ['text', 'image']);
+    assert.equal(dynamic.supports_image_detail_original, true);
     assert.equal(mock.seen.length, 0);
   });
 });
@@ -354,6 +468,34 @@ test('十个静态模型均请求 /responses，模型名和密钥按路由隔离
       'Bearer test-open-key',
       'Bearer test-zai-key',
       'Bearer test-zai-key',
+    ]);
+  });
+});
+
+test('普通 responses 使用模型级 key 优先级并回退到 Provider key', async () => {
+  await withCustomServers(keyPriorityConfig, { env: { MODEL_KEY: 'model-key' }, secrets: {} }, async (mock, proxy) => {
+    for (const model of ['foo/env-key', 'foo/explicit-key', 'foo/fallback-key']) {
+      const result = await postJson(proxy.baseUrl, { model, input: 'hello' });
+      assert.equal(result.status, 200);
+    }
+    assert.deepEqual(mock.seen.map((request) => request.auth), [
+      'Bearer model-key',
+      'Bearer provider-model-key',
+      'Bearer provider-key',
+    ]);
+  });
+});
+
+test('compact 使用模型级 key 优先级并回退到 Provider key', async () => {
+  await withCustomServers(keyPriorityConfig, { env: { MODEL_KEY: 'model-key' }, secrets: {} }, async (mock, proxy) => {
+    for (const model of ['foo/env-key', 'foo/explicit-key', 'foo/fallback-key']) {
+      const result = await postCompact(proxy.baseUrl, { model, input: 'hello' });
+      assert.equal(result.status, 200);
+    }
+    assert.deepEqual(mock.seen.map((request) => request.auth), [
+      'Bearer model-key',
+      'Bearer provider-model-key',
+      'Bearer provider-key',
     ]);
   });
 });

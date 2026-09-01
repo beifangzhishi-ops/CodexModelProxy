@@ -3,6 +3,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { normalizeResponsesBody } from './history-normalize.mjs';
 import { createProxyAgent } from './proxy-agent.mjs';
+import { resolveRouteApiKey } from './provider-registry.mjs';
 
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 600000;
@@ -214,7 +215,7 @@ function requestBufferedCompact({ req, body, slug, route, secrets, proxyUrl, env
     } else if (authMode === 'none') {
       upstreamAuthorization = '';
     } else {
-      const apiKey = route.api_key || env[route.api_key_env] || secrets[route.api_key_env];
+      const apiKey = resolveRouteApiKey(route, env, secrets);
       if (!apiKey) {
         resolve({
           slug,
