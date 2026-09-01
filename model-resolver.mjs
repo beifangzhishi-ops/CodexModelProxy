@@ -45,6 +45,12 @@ export function resolveModelSelection(model, registry) {
       };
     }
     const canonical = `${provider.model_prefix}${canonicalReference.model}`;
+    const configuredModel = typeof registry.getConfiguredStaticModel === 'function'
+      ? registry.getConfiguredStaticModel(canonical)
+      : null;
+    if (configuredModel?.spec.enabled === false) {
+      return disabledModel(canonical);
+    }
     const staticModel = registry.getStaticModel(canonical);
     if (!staticModel && !provider.discover_models) {
       return invalidModel(model, `Provider ${provider.id} 未配置模型：${canonicalReference.model}`);
@@ -150,6 +156,7 @@ export function buildProviderRoute({
     globalOverrides: registry.globalOverrides,
   });
   const profile = getCompatibilityProfile(compatProfile);
+  const effectiveAuthMode = modelSpec.auth_mode || provider.auth_mode || 'api_key';
   const route = {
     provider_id: provider.id,
     provider: provider.id,
@@ -157,16 +164,18 @@ export function buildProviderRoute({
     canonical_model: canonical,
     upstream_base_url: modelSpec.upstream_base_url || provider.base_url,
     upstream_model: modelSpec.upstream_model || modelName,
-    auth_mode: modelSpec.auth_mode || provider.auth_mode,
+    auth_mode: effectiveAuthMode,
     api_key: String(modelSpec.api_key || '').trim(),
     api_key_env: typeof modelSpec.api_key_env === 'string'
       ? modelSpec.api_key_env.trim()
       : '',
     provider_api_key: String(provider.api_key || '').trim(),
     network: modelSpec.network || provider.network,
-    strip_client_credentials: modelSpec.strip_client_credentials === undefined
-      ? provider.strip_client_credentials
-      : Boolean(modelSpec.strip_client_credentials),
+    strip_client_credentials: resolveStripClientCredentials(
+      modelSpec,
+      provider,
+      effectiveAuthMode,
+    ),
     metadata_slug: modelSpec.metadata_slug || modelSpec.template_slug || modelName,
     ...(modelSpec.upstream_timeout_ms !== undefined
       ? { upstream_timeout_ms: modelSpec.upstream_timeout_ms }
@@ -187,23 +196,42 @@ export function buildProviderRoute({
 }
 
 export function buildLegacyRoute(route, provider, publicModel, canonical) {
+  const effectiveAuthMode = route.auth_mode || provider?.auth_mode || 'api_key';
   const result = {
     ...route,
     provider_id: provider?.id || route.provider_id || route.provider || 'legacy',
     provider: provider?.id || route.provider || route.provider_id || 'legacy',
     public_model: publicModel,
     canonical_model: canonical,
+    auth_mode: effectiveAuthMode,
     api_key: String(route.api_key || '').trim(),
     api_key_env: String(route.api_key_env || provider?.api_key_env || '').trim(),
     provider_api_key: String(provider?.api_key || '').trim(),
     network: route.network || provider?.network,
-    strip_client_credentials: route.strip_client_credentials === undefined
-      ? Boolean(provider?.strip_client_credentials)
-      : Boolean(route.strip_client_credentials),
+    strip_client_credentials: resolveStripClientCredentials(
+      route,
+      provider,
+      effectiveAuthMode,
+    ),
   };
   if (!result.reasoning_format) result.reasoning_format = 'passthrough';
   if (!result.tool_output_format) result.tool_output_format = 'passthrough';
   return result;
+}
+
+export function resolveStripClientCredentials(modelSpec, provider, effectiveAuthMode) {
+  if (
+    modelSpec &&
+    Object.prototype.hasOwnProperty.call(modelSpec, 'strip_client_credentials')
+  ) {
+    return Boolean(modelSpec.strip_client_credentials);
+  }
+
+  if (provider?.strip_client_credentials_explicit) {
+    return Boolean(provider.strip_client_credentials);
+  }
+
+  return effectiveAuthMode !== 'openai_passthrough';
 }
 
 function resolveAliasTarget(model, aliases) {
@@ -225,5 +253,14 @@ function invalidModel(model, detail = '') {
     status: 400,
     errorType: 'invalid_request_error',
     message: detail ? `未知模型：${model}（${detail}）` : `未知模型：${model}`,
+  };
+}
+
+function disabledModel(canonical) {
+  return {
+    ok: false,
+    status: 503,
+    errorType: 'upstream_unavailable',
+    message: `模型 ${canonical} 已禁用`,
   };
 }

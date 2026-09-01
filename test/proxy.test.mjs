@@ -274,14 +274,24 @@ async function withServers(fn, {
   logger = silentLogger,
   systemProxyResolver,
   discoveryFetchModels,
+  configOverrides = {},
 } = {}) {
   const mock = await startMockUpstream();
   const proxyEnv = {
     ...env,
     ...(env.CPA_BASE_URL === '__MOCK_BASE_URL__' ? { CPA_BASE_URL: mock.baseUrl } : {}),
   };
+  const resolvedConfigOverrides = typeof configOverrides === 'function'
+    ? configOverrides(mock.baseUrl)
+    : configOverrides;
   const proxy = await startProxy(
-    { host: '127.0.0.1', port: 0, models: testRoutes(mock.baseUrl), catalog: testCatalog() },
+    {
+      host: '127.0.0.1',
+      port: 0,
+      models: testRoutes(mock.baseUrl),
+      catalog: testCatalog(),
+      ...resolvedConfigOverrides,
+    },
     secrets,
     proxyEnv,
     logger,
@@ -433,6 +443,52 @@ test('disabled Provider 保留 alias 的 503 语义且不出现在模型目录',
   });
 });
 
+test('模型级 enabled:false 保留 alias 构建但不放行请求或模型目录', async () => {
+  await withCustomServers((baseUrl) => ({
+    providers: {
+      foo: {
+        enabled: true,
+        base_url: baseUrl,
+        api_key: 'foo-key',
+        auth_mode: 'api_key',
+        protocol: 'responses',
+        model_prefix: 'foo/',
+        compat_profile: 'passthrough',
+        models: { alpha: { enabled: false } },
+      },
+    },
+    models: {
+      'legacy-alpha': {
+        provider_id: 'foo',
+        upstream_base_url: baseUrl,
+        upstream_model: 'alpha',
+        auth_mode: 'api_key',
+        api_key_env: 'FOO_KEY',
+        reasoning_format: 'passthrough',
+        tool_output_format: 'passthrough',
+      },
+    },
+    aliases: { 'legacy-alpha': 'foo/alpha' },
+    catalog: { models: [{ slug: 'legacy-alpha', display_name: 'Legacy Alpha' }] },
+  }), { secrets: { FOO_KEY: 'foo-key' } }, async (mock, proxy) => {
+    const legacy = await postJson(proxy.baseUrl, { model: 'legacy-alpha', input: 'hello' });
+    const canonical = await postJson(proxy.baseUrl, { model: 'foo/alpha', input: 'hello' });
+    assert.equal(legacy.status, 503);
+    assert.equal(canonical.status, 503);
+    assert.match(legacy.text, /模型 foo\/alpha 已禁用/);
+    assert.match(canonical.text, /模型 foo\/alpha 已禁用/);
+
+    const listResponse = await fetch(`${proxy.baseUrl}/v1/models`);
+    assert.equal(listResponse.status, 200);
+    const list = await listResponse.json();
+    assert.equal(list.data.some((model) => model.id === 'legacy-alpha'), false);
+    assert.equal(list.data.some((model) => model.id === 'foo/alpha'), false);
+    assert.equal(list.models.some((model) => model.slug === 'legacy-alpha'), false);
+    assert.equal(list.models.some((model) => model.slug === 'foo/alpha'), false);
+    assert.equal(mock.seen.length, 0);
+  });
+});
+
 test('十个静态模型均请求 /responses，模型名和密钥按路由隔离', async () => {
   await withServers(async (mock, proxy) => {
     const gptHeaders = { authorization: 'Bearer chatgpt-login-token', 'chatgpt-account-id': 'acct-test' };
@@ -483,6 +539,81 @@ test('普通 responses 使用模型级 key 优先级并回退到 Provider key', 
       'Bearer provider-model-key',
       'Bearer provider-key',
     ]);
+  });
+});
+
+test('普通请求与 compact 按最终 auth_mode 隔离客户端凭据', async () => {
+  await withCustomServers((baseUrl) => ({
+    providers: {
+      passthrough: {
+        base_url: baseUrl,
+        api_key: 'server-model-key',
+        auth_mode: 'openai_passthrough',
+        protocol: 'responses',
+        model_prefix: 'pass/',
+        compat_profile: 'passthrough',
+        models: {
+          'api-key-model': { auth_mode: 'api_key' },
+        },
+      },
+      api: {
+        base_url: baseUrl,
+        api_key: 'provider-key',
+        auth_mode: 'api_key',
+        protocol: 'responses',
+        model_prefix: 'api/',
+        compat_profile: 'passthrough',
+        models: {
+          'passthrough-model': { auth_mode: 'openai_passthrough' },
+          'none-model': { auth_mode: 'none' },
+        },
+      },
+    },
+  }), {}, async (mock, proxy) => {
+    const callerHeaders = {
+      authorization: 'Bearer caller-token',
+      'chatgpt-account-id': 'caller-account',
+      cookie: 'session=caller-cookie',
+      'x-api-key': 'caller-api-key',
+    };
+    const apiKey = await postJson(proxy.baseUrl, {
+      model: 'pass/api-key-model',
+      input: 'hello',
+    }, callerHeaders);
+    const passthrough = await postJson(proxy.baseUrl, {
+      model: 'api/passthrough-model',
+      input: 'hello',
+    }, callerHeaders);
+    const none = await postJson(proxy.baseUrl, {
+      model: 'api/none-model',
+      input: 'hello',
+    }, callerHeaders);
+    const compact = await postCompact(proxy.baseUrl, {
+      model: 'pass/api-key-model',
+      input: 'hello',
+    }, callerHeaders);
+
+    assert.deepEqual(
+      [apiKey.status, passthrough.status, none.status, compact.status],
+      [200, 200, 200, 200],
+    );
+    const [apiKeyRequest, passthroughRequest, noneRequest, compactRequest] = mock.seen;
+    assert.equal(apiKeyRequest.auth, 'Bearer server-model-key');
+    assert.equal(apiKeyRequest.accountId, '');
+    assert.equal(apiKeyRequest.cookie, '');
+    assert.equal(apiKeyRequest.xApiKey, '');
+    assert.equal(passthroughRequest.auth, 'Bearer caller-token');
+    assert.equal(passthroughRequest.accountId, 'caller-account');
+    assert.equal(passthroughRequest.cookie, 'session=caller-cookie');
+    assert.equal(passthroughRequest.xApiKey, 'caller-api-key');
+    assert.equal(noneRequest.auth, '');
+    assert.equal(noneRequest.accountId, '');
+    assert.equal(noneRequest.cookie, '');
+    assert.equal(noneRequest.xApiKey, '');
+    assert.equal(compactRequest.auth, 'Bearer server-model-key');
+    assert.equal(compactRequest.accountId, '');
+    assert.equal(compactRequest.cookie, '');
+    assert.equal(compactRequest.xApiKey, '');
   });
 });
 
@@ -693,6 +824,99 @@ test('CPA 与订阅直通并发请求的模型、认证和账号头互不污染'
     assert.equal(cpaRequest.auth, 'Bearer cpa-service-key');
     assert.equal(cpaRequest.accountId, '');
   }, {
+    secrets: { ...testSecrets(), CPA_API_KEY: 'cpa-service-key' },
+    env: { CPA_BASE_URL: '__MOCK_BASE_URL__' },
+  });
+});
+
+test('canonical 默认不展示但仍可解析并转发', async () => {
+  await withServers(async (mock, proxy) => {
+    const listResponse = await fetch(`${proxy.baseUrl}/v1/models`);
+    assert.equal(listResponse.status, 200);
+    const list = await listResponse.json();
+    for (const models of [list.data.map((model) => model.id), list.models.map((model) => model.slug)]) {
+      assert.ok(models.every((model) => !/^(chatgpt|oc|ds|zai)\//.test(model)));
+      assert.ok(models.some((model) => model.startsWith('cpa/')));
+    }
+
+    const gpt = await postJson(proxy.baseUrl, {
+      model: 'chatgpt/gpt-5.6-terra',
+      input: 'hello',
+    }, { authorization: 'Bearer chatgpt-token' });
+    const oc = await postJson(proxy.baseUrl, {
+      model: 'oc/deepseek-v4-flash',
+      input: 'hello',
+    });
+    const ds = await postJson(proxy.baseUrl, {
+      model: 'ds/deepseek-v4-flash',
+      input: 'hello',
+    });
+    const zai = await postJson(proxy.baseUrl, {
+      model: 'zai/glm-5.3',
+      input: 'hello',
+    });
+    assert.deepEqual([gpt.status, oc.status, ds.status, zai.status], [200, 200, 200, 200]);
+    assert.deepEqual(mock.seen.slice(1).map((request) => request.body.model), [
+      'gpt-5.6-terra',
+      'deepseek-v4-flash',
+      'deepseek-v4-flash',
+      'glm-5.3',
+    ]);
+  }, {
+    configOverrides: (baseUrl) => ({
+      expose_canonical_models: false,
+      providers: {
+        chatgpt: {
+          base_url: baseUrl,
+          auth_mode: 'openai_passthrough',
+          protocol: 'responses',
+          model_prefix: 'chatgpt/',
+          compat_profile: 'openai',
+          models: {
+            'gpt-5.6-sol': {},
+            'gpt-5.6-terra': {},
+            'gpt-5.6-luna': {},
+          },
+        },
+        opencode: {
+          base_url: baseUrl,
+          api_key: 'oc-key',
+          auth_mode: 'api_key',
+          protocol: 'responses',
+          model_prefix: 'oc/',
+          compat_profile: 'deepseek',
+          models: {
+            'deepseek-v4-flash': {},
+            'deepseek-v4-pro': {},
+          },
+        },
+        deepseek: {
+          base_url: baseUrl,
+          api_key: 'ds-key',
+          auth_mode: 'api_key',
+          protocol: 'responses',
+          model_prefix: 'ds/',
+          compat_profile: 'deepseek',
+          network: 'direct',
+          models: {
+            'deepseek-v4-flash': {},
+            'deepseek-v4-pro': {},
+          },
+        },
+        zai: {
+          base_url: baseUrl,
+          api_key: 'zai-key',
+          auth_mode: 'api_key',
+          protocol: 'responses',
+          model_prefix: 'zai/',
+          compat_profile: 'passthrough',
+          models: {
+            'glm-5.3': {},
+            'glm-5.3-flash': {},
+          },
+        },
+      },
+    }),
     secrets: { ...testSecrets(), CPA_API_KEY: 'cpa-service-key' },
     env: { CPA_BASE_URL: '__MOCK_BASE_URL__' },
   });
@@ -1022,7 +1246,7 @@ test('上游错误状态、响应头和正文保持不变', async () => {
 
 test('生产配置的静态路由与基础模型目录严格对应', () => {
   const config = loadConfig();
-  assert.equal(config.compact_fallback_model, undefined);
+  assert.equal(config.expose_canonical_models, false);
   assert.deepEqual(Object.keys(config.models), MODEL_SLUGS);
   assert.deepEqual(config.catalog.models.map((model) => model.slug), MODEL_SLUGS);
   assert.equal(config.models['deepseek-v4-flash'].auth_mode, 'api_key');

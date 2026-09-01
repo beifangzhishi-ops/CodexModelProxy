@@ -3,8 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createProviderRegistry, loadRuntimeEnv } from '../provider-registry.mjs';
-import { resolveModelSelection } from '../model-resolver.mjs';
+import {
+  createProviderRegistry,
+  loadRuntimeEnv,
+  resolveRouteApiKey,
+} from '../provider-registry.mjs';
+import {
+  buildLegacyRoute,
+  resolveModelSelection,
+  resolveStripClientCredentials,
+} from '../model-resolver.mjs';
 
 function validProvider(overrides = {}) {
   return {
@@ -63,6 +71,76 @@ test('openai_passthrough Provider 不需要服务端 key', () => {
   assert.equal(registry.getProvider('chatgpt').api_key, '');
 });
 
+test('Provider 和最终 auth_mode 共同决定客户端凭据剥离策略', () => {
+  const registry = createProviderRegistry({
+    config: {
+      providers: {
+        passthrough: validProvider({
+          api_key: '',
+          auth_mode: 'openai_passthrough',
+          model_prefix: 'pass/',
+          models: { alpha: { auth_mode: 'api_key' } },
+        }),
+        api: validProvider({
+          auth_mode: 'api_key',
+          model_prefix: 'api/',
+          models: { alpha: { auth_mode: 'openai_passthrough' } },
+        }),
+        none: validProvider({
+          api_key: '',
+          auth_mode: 'none',
+          model_prefix: 'none/',
+          models: { alpha: {} },
+        }),
+      },
+    },
+  });
+
+  assert.equal(registry.getProvider('passthrough').strip_client_credentials, false);
+  assert.equal(registry.getProvider('passthrough').strip_client_credentials_explicit, false);
+  assert.equal(resolveModelSelection('pass/alpha', registry).route.strip_client_credentials, true);
+  assert.equal(resolveModelSelection('api/alpha', registry).route.strip_client_credentials, false);
+  assert.equal(registry.getProvider('none').strip_client_credentials, true);
+  assert.equal(resolveModelSelection('none/alpha', registry).route.strip_client_credentials, true);
+
+  const providerExplicit = {
+    strip_client_credentials: false,
+    strip_client_credentials_explicit: true,
+  };
+  assert.equal(resolveStripClientCredentials({ strip_client_credentials: true }, providerExplicit, 'api_key'), true);
+  assert.equal(resolveStripClientCredentials({}, providerExplicit, 'api_key'), false);
+  assert.equal(resolveStripClientCredentials({}, {
+    strip_client_credentials: true,
+    strip_client_credentials_explicit: false,
+  }, 'openai_passthrough'), false);
+  assert.equal(resolveStripClientCredentials({}, {
+    strip_client_credentials: true,
+    strip_client_credentials_explicit: false,
+  }, 'api_key'), true);
+
+  assert.equal(buildLegacyRoute(
+    { auth_mode: 'api_key' },
+    registry.getProvider('passthrough'),
+    'legacy-api',
+    'pass/alpha',
+  ).strip_client_credentials, true);
+  assert.equal(buildLegacyRoute(
+    { auth_mode: 'openai_passthrough' },
+    registry.getProvider('api'),
+    'legacy-pass',
+    'api/alpha',
+  ).strip_client_credentials, false);
+});
+
+test('Provider strip_client_credentials 必须是布尔值', () => {
+  assert.throws(
+    () => createProviderRegistry({ config: {
+      providers: { foo: validProvider({ strip_client_credentials: 'true' }) },
+    } }),
+    /Provider foo 字段 strip_client_credentials 必须是布尔值/,
+  );
+});
+
 test('启用 Provider 缺少 URL 或 key 时严格拒绝', () => {
   assert.throws(
     () => createProviderRegistry({ config: { providers: { foo: validProvider({ base_url: '' }) } } }),
@@ -81,6 +159,7 @@ test('model_overrides 的路由字段在 Registry 构建期校验', () => {
     [{ timeout_ms: 0 }, /model_overrides\.x-\* timeout_ms 必须是正整数/],
     [{ reasoning_format: 'invalid' }, /model_overrides\.x-\* 的 reasoning_format 无效/],
     [{ upstream_base_url: 'ftp://foo.example/v1' }, /model_overrides\.x-\* upstream_base_url 仅支持 http\/https/],
+    [{ enabled: false }, /model_overrides\.x-\* 不支持 enabled 字段/],
   ];
   for (const [spec, error] of invalidCases) {
     assert.throws(
@@ -118,6 +197,49 @@ test('数组形式 models 和 model_overrides 合并后仍按名称解析', () =
   assert.equal(registry.getProvider('foo').model_overrides[0], undefined);
   assert.equal(registry.getProvider('foo').model_overrides['gpt-*'].upstream_model, undefined);
   assert.equal(resolveModelSelection('foo/gamma', registry).route.upstream_model, 'gamma');
+});
+
+test('静态模型 enabled:false 保留配置索引、允许 alias 构建但请求返回 503', () => {
+  const registry = createProviderRegistry({
+    config: {
+      providers: {
+        foo: validProvider({ models: { alpha: { enabled: false } } }),
+      },
+      aliases: { 'legacy-alpha': 'foo/alpha' },
+    },
+  });
+  assert.equal(registry.getConfiguredStaticModel('foo/alpha').spec.enabled, false);
+  assert.equal(registry.getStaticModel('foo/alpha'), null);
+  assert.deepEqual(registry.knownCanonicalModels(), []);
+  const selection = resolveModelSelection('legacy-alpha', registry);
+  assert.equal(selection.status, 503);
+  assert.match(selection.message, /模型 foo\/alpha 已禁用/);
+});
+
+test('动态 Provider 的本地 enabled:false 不能被动态模型放行', async () => {
+  const registry = createProviderRegistry({
+    config: {
+      providers: {
+        foo: validProvider({
+          discover_models: true,
+          models: { foo: { enabled: false } },
+        }),
+      },
+    },
+    discoveryFetchModels: async () => ({ data: [{ id: 'foo' }, { id: 'live' }] }),
+  });
+  const selection = resolveModelSelection('foo/foo', registry);
+  assert.equal(selection.status, 503);
+  assert.match(selection.message, /模型 foo\/foo 已禁用/);
+  assert.deepEqual((await registry.discoverAll()).map((model) => model.id), ['foo/live']);
+});
+
+test('模型级 key 读取时空环境变量不会遮住 secrets', () => {
+  const route = { api_key_env: 'MODEL_KEY', provider_api_key: 'provider-key' };
+  assert.equal(resolveRouteApiKey(route, { MODEL_KEY: '' }, { MODEL_KEY: 'secret-key' }), 'secret-key');
+  assert.equal(resolveRouteApiKey(route, { MODEL_KEY: 'env-key' }, { MODEL_KEY: 'secret-key' }), 'env-key');
+  assert.equal(resolveRouteApiKey({ ...route, api_key: 'explicit-key' }, { MODEL_KEY: 'env-key' }, { MODEL_KEY: 'secret-key' }), 'explicit-key');
+  assert.equal(resolveRouteApiKey(route, { MODEL_KEY: '  ' }, { MODEL_KEY: '' }), 'provider-key');
 });
 
 test('Provider protocol、profile、namespace 和保留 id 校验', () => {

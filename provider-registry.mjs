@@ -104,8 +104,11 @@ export function resolveRouteApiKey(route, env = {}, secrets = {}) {
 
   const envName = String(route?.api_key_env || '').trim();
   if (envName) {
-    const value = env[envName] ?? secrets[envName];
-    if (value !== undefined && String(value).trim()) return String(value).trim();
+    const envValue = env[envName];
+    if (envValue !== undefined && String(envValue).trim()) return String(envValue).trim();
+
+    const secretValue = secrets[envName];
+    if (secretValue !== undefined && String(secretValue).trim()) return String(secretValue).trim();
   }
 
   return String(route?.provider_api_key || '').trim();
@@ -131,6 +134,12 @@ export function validateProvider(providerId, raw, {
 
   if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
     throw new Error(`Provider ${id} 字段 enabled 必须是布尔值`);
+  }
+  if (
+    raw.strip_client_credentials !== undefined &&
+    typeof raw.strip_client_credentials !== 'boolean'
+  ) {
+    throw new Error(`Provider ${id} 字段 strip_client_credentials 必须是布尔值`);
   }
 
   if (!SUPPORTED_AUTH_MODES.has(authMode)) {
@@ -192,9 +201,10 @@ export function validateProvider(providerId, raw, {
     network: raw.network || 'default',
     api_key_env: raw.api_key_env || raw.key_env || LEGACY_PROVIDER_KEY_ENV[id] || '',
     api_key: resolvedApiKey,
+    strip_client_credentials_explicit: raw.strip_client_credentials !== undefined,
     strip_client_credentials: raw.strip_client_credentials === undefined
-      ? authMode === 'api_key'
-      : Boolean(raw.strip_client_credentials),
+      ? authMode !== 'openai_passthrough'
+      : raw.strip_client_credentials,
     models: normalizeModelMap(raw.models),
     model_overrides: normalizeModelOverrides(raw.model_overrides, id),
     model_compatibility: normalizePatternOverrides(raw.model_compatibility),
@@ -239,6 +249,7 @@ export function createProviderRegistry({
   const providers = new Map();
   const namespaces = new Map();
   const legacyRoutes = new Map(Object.entries(config.models || {}));
+  const configuredStaticModels = new Map();
   const staticModels = new Map();
 
   for (const providerId of providerIds) {
@@ -303,13 +314,14 @@ export function createProviderRegistry({
   }
 
   for (const provider of providers.values()) {
-    if (!provider.enabled) continue;
     for (const [modelName, modelSpec] of Object.entries(provider.models)) {
       const normalizedModelName = normalizeModelName(modelName, provider.id);
       const spec = normalizeModelSpec(modelName, modelSpec, provider.id);
-      if (spec.enabled === false) continue;
       const canonical = `${provider.model_prefix}${normalizedModelName}`;
-      staticModels.set(canonical, { provider, modelName: normalizedModelName, spec });
+      const configuredModel = { provider, modelName: normalizedModelName, spec };
+      configuredStaticModels.set(canonical, configuredModel);
+      if (!provider.enabled || spec.enabled === false) continue;
+      staticModels.set(canonical, configuredModel);
     }
   }
 
@@ -338,7 +350,7 @@ export function createProviderRegistry({
     const directCanonical = `${directProvider.model_prefix}${String(directRoute.upstream_model || directRouteSlug).trim()}`;
     if (!aliases.has(directSlug)) aliases.set(directSlug, directCanonical);
   }
-  validateAliasGraph(aliases, providers, staticModels);
+  validateAliasGraph(aliases, providers, configuredStaticModels);
 
   const discoveries = new Map();
   for (const provider of providers.values()) {
@@ -358,6 +370,7 @@ export function createProviderRegistry({
     aliases,
     legacyRoutes,
     legacyRouteProviders: legacy.routeProviders,
+    configuredStaticModels,
     staticModels,
     discoveries,
     globalOverrides,
@@ -371,6 +384,9 @@ export function createProviderRegistry({
     getStaticModel(canonical) {
       return staticModels.get(canonical) || null;
     },
+    getConfiguredStaticModel(canonical) {
+      return configuredStaticModels.get(canonical) || null;
+    },
     getDiscovery(providerId) {
       return discoveries.get(providerId) || null;
     },
@@ -383,7 +399,12 @@ export function createProviderRegistry({
     visibleLegacySlugs() {
       return [...legacyRoutes.keys()].filter((slug) => {
         const providerId = legacy.routeProviders.get(slug);
-        return providers.get(providerId)?.enabled === true;
+        const provider = providers.get(providerId);
+        if (provider?.enabled !== true) return false;
+        const route = legacyRoutes.get(slug);
+        const upstreamModel = String(route?.upstream_model || slug).trim();
+        const canonical = `${provider.model_prefix}${upstreamModel}`;
+        return configuredStaticModels.get(canonical)?.spec.enabled !== false;
       });
     },
     knownCanonicalModels() {
@@ -396,7 +417,9 @@ export function createProviderRegistry({
           models: await discovery.getModels(),
         })),
       );
-      return lists.flatMap((item) => item.models);
+      return lists
+        .flatMap((item) => item.models)
+        .filter((model) => configuredStaticModels.get(model.id)?.spec.enabled !== false);
     },
   };
 }
@@ -419,7 +442,6 @@ function collectLegacyProviders(routes) {
         compat_profile: profile,
         network: route.network || 'default',
         ...(route.api_key_env ? { api_key_env: route.api_key_env } : {}),
-        strip_client_credentials: route.provider === 'cpa' || route.provider_id === 'cpa',
         models: {},
       };
     }
@@ -527,18 +549,25 @@ function normalizeModelOverrides(value, providerId) {
       throw new Error(`Provider ${providerId} 存在空 model override`);
     }
     const spec = typeof raw === 'string' ? { upstream_model: raw } : { ...(raw || {}) };
-    validateModelSpecFields(spec, `Provider ${providerId} model_overrides.${normalizedPattern}`);
+    validateModelSpecFields(
+      spec,
+      `Provider ${providerId} model_overrides.${normalizedPattern}`,
+      { allowEnabled: false },
+    );
     result[normalizedPattern] = spec;
   }
   return result;
 }
 
-function validateModelSpecFields(spec, label) {
+function validateModelSpecFields(spec, label, { allowEnabled = true } = {}) {
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
     throw new Error(`${label} 必须是对象`);
   }
-  if (spec.enabled !== undefined && typeof spec.enabled !== 'boolean') {
-    throw new Error(`${label} enabled 必须是布尔值`);
+  if (spec.enabled !== undefined) {
+    if (!allowEnabled) throw new Error(`${label} 不支持 enabled 字段`);
+    if (typeof spec.enabled !== 'boolean') {
+      throw new Error(`${label} enabled 必须是布尔值`);
+    }
   }
   if (spec.compat_profile !== undefined && !isValidCompatibilityProfile(spec.compat_profile)) {
     throw new Error(`${label} compat_profile 无效：${spec.compat_profile}`);
@@ -616,7 +645,7 @@ function validateProviderDiscoverySettings(providerId, provider) {
   }
 }
 
-function validateAliasGraph(aliases, providers, staticModels) {
+function validateAliasGraph(aliases, providers, configuredStaticModels) {
   for (const [alias, target] of aliases) {
     if (alias === target) throw new Error(`alias ${alias} 不能指向自身`);
     const chain = new Set([alias]);
@@ -628,11 +657,11 @@ function validateAliasGraph(aliases, providers, staticModels) {
       chain.add(current);
       current = aliases.get(current);
     }
-    validateModelTarget(current, providers, staticModels, alias);
+    validateModelTarget(current, providers, configuredStaticModels, alias);
   }
 }
 
-function validateModelTarget(target, providers, staticModels, alias) {
+function validateModelTarget(target, providers, configuredStaticModels, alias) {
   const slash = target.indexOf('/');
   if (slash <= 0 || slash === target.length - 1) {
     throw new Error(`alias ${alias} 的目标无效：${target}`);
@@ -642,12 +671,12 @@ function validateModelTarget(target, providers, staticModels, alias) {
   const provider = [...providers.values()].find((item) => item.namespace === namespace);
   if (!provider) throw new Error(`alias ${alias} 指向未知 Provider 命名空间：${namespace}`);
   if (!provider.enabled) {
-    if (!provider.discover_models && !Object.prototype.hasOwnProperty.call(provider.models || {}, modelName)) {
+    if (!provider.discover_models && !configuredStaticModels.has(target)) {
       throw new Error(`alias ${alias} 指向未配置的静态模型：${target}`);
     }
     return;
   }
-  if (!provider.discover_models && !staticModels.has(target)) {
+  if (!provider.discover_models && !configuredStaticModels.has(target)) {
     throw new Error(`alias ${alias} 指向未配置的静态模型：${target}`);
   }
 }
