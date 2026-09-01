@@ -68,6 +68,58 @@ CMP 返回的 Codex 模型元数据优先使用 `models_unified.json` 中的精�
 
 > 注意：代理本身就是 Codex 正在使用的通信通道。如果当前 Codex 正通过本中转（`base_url` 指向本代理），停止或重启代理前，请先切换到直连配置，操作完成后再切回统一中转。
 
+## Windows 计划任务自动启动（Codex 桌面端）
+
+CMP 可以注册为 Windows 计划任务，在当前用户登录后自动后台启动。这个任务只负责启动 CMP，不启动、停止或控制 Codex 桌面端；桌面端仍按 `%USERPROFILE%\.codex\config.toml` 中的 `base_url` 连接 `http://127.0.0.1:8787/v1`。
+
+CMP 会动态读取当前登录用户的 Windows 手动系统代理，并对读取结果做约 2 秒缓存。因此不需要等待 FlClash，也不需要人为安排 FlClash 与 CMP 的启动顺序：FlClash 登录后稍晚启动、切换系统代理或改变代理端口时，新的 CMP 上游请求会自动采用更新后的代理设置。
+
+推荐把任务设为“当前用户登录时”触发，并以当前登录用户身份运行。不要默认使用 `SYSTEM` 账户，因为 CMP 依赖当前用户的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` 手动代理配置，以及用户目录中的 Codex/本机配置。`start-proxy.cmd` 启动前会先请求本机 `/healthz`；CMP 已经运行时脚本会直接成功退出，因此重复触发不会正常情况下再启动第二个实例。
+
+在仓库目录打开 PowerShell，执行以下命令即可创建任务；不需要管理员权限，默认使用当前交互用户和普通权限：
+
+```powershell
+$repo = (Resolve-Path '.').Path
+$taskName = 'CodexModelProxy'
+$user = "$env:USERDOMAIN\$env:USERNAME"
+
+$action = New-ScheduledTaskAction `
+  -Execute "$env:SystemRoot\System32\cmd.exe" `
+  -Argument "/d /c `"$repo\start-proxy.cmd`"" `
+  -WorkingDirectory $repo
+
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+$principal = New-ScheduledTaskPrincipal `
+  -UserId $user `
+  -LogonType Interactive `
+  -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet `
+  -AllowStartIfOnBatteries `
+  -DontStopIfGoingOnBatteries `
+  -StartWhenAvailable
+
+Register-ScheduledTask `
+  -TaskName $taskName `
+  -Action $action `
+  -Trigger $trigger `
+  -Principal $principal `
+  -Settings $settings `
+  -Description 'Start CodexModelProxy after Windows logon' `
+  -Force
+```
+
+创建后可用下面的命令查询、手动触发或删除任务：
+
+```powershell
+Get-ScheduledTask -TaskName 'CodexModelProxy' | Get-ScheduledTaskInfo
+Start-ScheduledTask -TaskName 'CodexModelProxy'
+Unregister-ScheduledTask -TaskName 'CodexModelProxy' -Confirm:$false
+```
+
+也可以通过 `Win + R` 打开 `taskschd.msc` 手工创建：在“常规”中选择当前 Windows 用户并使用“仅当用户登录时运行”；触发器选择“登录时”并限定当前用户；操作中的程序填写 `cmd.exe`，参数填写 `/d /c "完整仓库路径\start-proxy.cmd"`，“起始于”填写仓库目录。无需设置固定延迟，也无需为 FlClash 增加前置条件。
+
+如果确实要在“尚未登录任何用户”时运行 CMP，需要另外设计专用服务账户和显式上游代理环境；这与当前依赖用户 WinINet 代理的默认配置不同，不建议作为桌面端机器的默认方案。
+
 ## CLIProxyAPI（CPA）
 
 CPA 必须作为独立服务部署并由用户手动启动、停止，CodexModelProxy 只连接它，不负责进程管理、账号池管理或升级。推荐在 `providers.local.json` 中配置：
@@ -266,7 +318,4 @@ node --test --test-isolation=none test\history-normalize.test.mjs test\proxy.tes
 - 真实 API 密钥只存放在被 Git 忽略的 `providers.local.json` 或 `proxy-secrets.env`，不会进入仓库或日志；本机差异存于 `proxy-local.env`，同样不会提交。
 - 服务默认只监听 `127.0.0.1`，请勿改为 `0.0.0.0`。
 - 可选访问令牌通过 `X-Proxy-Access-Token` 校验，`/healthz` 始终不校验；仅当需要跨机器远程访问代理时才启用，并同步在 Codex 配置的 `http_headers` 填同一令牌。
-
-
-
 
