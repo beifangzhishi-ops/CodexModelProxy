@@ -1,12 +1,23 @@
 # CodexModelProxy 多模型纯 Responses 中转（Windows）
 
-本目录是一个零依赖的 Node.js 本地中转服务，让 Codex 通过一个本地地址使用 ChatGPT、OpenCode、DeepSeek、Z.AI 及可选 CPA Provider。Provider Registry 统一管理上游 URL、认证、网络策略、静态模型和动态模型发现；代理替换模型名、处理鉴权，并在发送前按目标模型整理 reasoning、网页搜索历史和指定的工具输出格式，其余请求与响应原样转发。
+本目录是一个零依赖的 Node.js 本地中转服务，让 Codex 通过一个本地地址使用 ChatGPT、OpenCode、DeepSeek、Z.AI，以及可选的 CLIProxyAPI（CPA）动态 Provider。Provider Registry 统一管理上游 URL、认证、网络策略、静态模型和动态模型发现；代理替换模型名、处理鉴权，并在发送前按目标模型整理 reasoning、网页搜索历史和指定的工具输出格式，其余请求与响应原样转发。
 
 项目只面向 Windows 本机使用，通过 Git 仓库在多个机器间同步更新：通用配置提交到仓库，密钥与本机差异（监听端口、访问令牌等）放在各自机器上、不提交。上游默认动态使用当前用户的 Windows 手动系统代理，无需在项目中重复填写 FlClash 端口。
 
+## 架构演进
+
+CMP 最初是 Codex 到 ChatGPT Backend API 的 Responses 透传层，因此最早只有少量 GPT 模型和针对 ChatGPT 登录态、reasoning/工具历史的固定兼容逻辑。随后项目加入 OpenCode、DeepSeek 和 Z.AI，当时这些 Provider 的常用模型也以静态模型表维护，非透传 Provider 的认证则通过各自 API Key 环境变量提供。
+
+之后 CMP 引入统一 Provider Registry，把 Provider 的上游地址、认证、网络策略、模型解析、兼容 profile 和转发路径收敛到同一套机制，并增加通用 `/models` 动态发现。当前静态和动态两种模式并存：
+
+- `chatgpt`、`opencode`、`deepseek`、`zai` 目前仍保留静态模型目录，主要承载早期兼容 slug、确定的 metadata 和模型级兼容规则；其中 ChatGPT 使用登录认证透传，OC/DS/ZAI 使用对应 API Key。
+- `cpa` 是当前主要使用动态发现的 Provider：`discover_models=true` 时，CMP 从 CPA 的 `/models` 实时获取模型，再以 `cpa/<模型>` 加入自己的 `/v1/models`。因此 CPA 不会出现在下面那张固定模型表里；它是否出现、出现哪些模型取决于运行时 CPA 返回结果。
+- CPA 的普通 `/responses`、`/responses/compact` 请求现在和 DS/OC/ZAI 一样经过 Provider Registry、model resolver 和统一转发路径；`cpa-provider.mjs` 仅保留旧 CPA 配置/调用方的兼容包装，不再代表一条独立的 CPA 转发通道。
+- 新 Provider 可以继续选择静态 `models`，也可以启用 `discover_models`。两种模型来源最终都会合并到 CMP 的 `/v1/models`。
+
 ## 模型映射
 
-Codex App Server 从当前 Provider 的 `/models` 动态读取完整模型目录，下拉列表按 `display_name` 展示，因此第三方模型不需要伪装成 `gpt-5.x` 别名。OpenCode 与直连 DeepSeek 的上游模型名相同，用 `-direct` 后缀区分直连通道。
+Codex App Server 从 CMP 的 `/models` 读取完整模型目录，下拉列表按 `display_name` 展示，因此第三方模型不需要伪装成 `gpt-5.x` 别名。下面只列当前固定维护的静态模型；CPA 等启用动态发现的 Provider 会在运行时追加模型，不需要在此逐项手写。OpenCode 与直连 DeepSeek 的上游模型名相同，用 `-direct` 后缀区分直连通道。
 
 | slug（请求与配置用） | 显示名（下拉列表可见） | 认证 | 实际上游 |
 |---|---|---|---|
@@ -20,6 +31,12 @@ Codex App Server 从当前 Provider 的 `/models` 动态读取完整模型目录
 | `muse-spark-1.2-contributor` | OC · Muse Spark 1.2 Contributor | `OPENCODE_API_KEY` | OpenCode GO `muse-spark-1.2-contributor` |
 | `glm-5.3` | ZAI · GLM-5.3 | `ZAI_API_KEY` | Z.AI `glm-5.3` |
 | `glm-5.3-flash` | ZAI · GLM-5.3-Flash | `ZAI_API_KEY` | Z.AI `glm-5.3-flash` |
+
+动态 Provider 的典型目录项例如：
+
+| slug | 显示名 | 认证 | 实际上游 |
+|---|---|---|---|
+| `cpa/<模型>` | `CPA · <模型>` | CPA Provider 自己的 API Key | CPA `/models` 返回的同名模型 |
 
 默认模型为 `deepseek-v4-flash`（OC · DSV4 Flash）。CMP 从启用 `discover_models` 的 Provider `/models` 动态同步模型，在自己的 `/v1/models` 中补成完整 Codex 模型元数据并加上 Provider 命名空间；旧模型 slug 仍通过 aliases 兼容。DeepSeek 的两条直连通道使用 `-direct` 后缀，旧的 `direct/` 请求前缀仍可用但不会出现在目录中。
 
