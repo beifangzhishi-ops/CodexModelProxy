@@ -31,6 +31,8 @@ import {
   resolveRouteApiKey,
 } from './provider-registry.mjs';
 import { resolveModelSelection as resolveRegistryModelSelection } from './model-resolver.mjs';
+import { deriveLegacyViews, sendModelList } from './model-catalog.mjs';
+export { buildProviderCatalogModels } from './model-catalog.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_FILE = path.join(__dirname, 'proxy-config.json');
@@ -168,6 +170,7 @@ export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT
   if (typeof config.models !== 'object' || Array.isArray(config.models)) {
     throw new Error('proxy-config.json 的 models 必须是对象');
   }
+  // 顶层 models 仅保留旧配置兼容；新配置应把连接与模型定义放到 providers。
   for (const [slug, route] of Object.entries(config.models)) {
     if (!route.upstream_base_url || typeof route.upstream_base_url !== 'string') {
       throw new Error(`路由 ${slug} 缺少 upstream_base_url`);
@@ -198,21 +201,33 @@ export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT
       throw new Error(`路由 ${slug} 的 tool_schema_compat 无效`);
     }
   }
-  if (config.model_catalog_file) {
-    const catalogFile = path.resolve(path.dirname(resolvedConfigFile), config.model_catalog_file);
-    let catalog;
-    try {
-      catalog = JSON.parse(fs.readFileSync(catalogFile, 'utf8'));
-    } catch (err) {
-      throw new Error(`无法读取模型目录：${catalogFile}（${err.message}）`);
-    }
-    if (!catalog || !Array.isArray(catalog.models)) {
-      throw new Error('模型目录必须包含 models 数组');
-    }
-    if (Object.keys(config.models).length > 0) {
-      assertSameSlugs('路由与模型目录名册', Object.keys(config.models), catalog.models.map((model) => model.slug));
-    }
-    config.catalog = catalog;
+
+  // 新 Provider-native 配置不再维护重复的顶层 route/catalog。
+  // 为旧调用方保留一个派生只读视图；createProxyServer 会继续使用未派生的 Provider 配置。
+  if (
+    Object.keys(config.models).length === 0 &&
+    config.providers && typeof config.providers === 'object' && !Array.isArray(config.providers)
+  ) {
+    const providerNativeConfig = { ...config, models: {} };
+    delete providerNativeConfig.catalog;
+    delete providerNativeConfig.model_catalog_file;
+    delete providerNativeConfig.metadata_model_map;
+    const registry = createProviderRegistry({
+      config: providerNativeConfig,
+      localConfig: { providers: {} },
+      env: {},
+      secrets: {},
+      validateCredentials: false,
+    });
+    const legacyViews = deriveLegacyViews(registry);
+    config.models = legacyViews.models;
+    config.catalog = legacyViews.catalog;
+    Object.defineProperty(config, '__providerNativeConfig', {
+      value: providerNativeConfig,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
   }
   return config;
 }
@@ -245,12 +260,12 @@ export function createProxyServer({
   validateProviderCredentials = false,
 }) {
   const routes = config.models || {};
-  const catalogModels = Array.isArray(config.catalog?.models) ? config.catalog.models : null;
+  const registryConfig = config.__providerNativeConfig || config;
   const accessToken = (env.PROXY_ACCESS_TOKEN || config.access_token || '').trim();
   const systemProxyResolver = configuredSystemProxyResolver || createWindowsSystemProxyResolver({ logger });
   let proxyForModel;
   const registry = configuredRegistry || createProviderRegistry({
-    config,
+    config: registryConfig,
     localConfig: configuredLocalConfig || { providers: {} },
     env,
     secrets,
@@ -295,7 +310,7 @@ export function createProxyServer({
     }
 
     if (req.method === 'GET' && pathname === '/v1/models') {
-      void sendModelList(res, registry, catalogModels).catch((err) => {
+      void sendModelList(res, registry, sendJson).catch((err) => {
         logger.error(`[codex-proxy] 模型列表生成失败：${err.message}`);
         if (!res.headersSent) {
           sendJson(res, 500, {
@@ -426,19 +441,6 @@ function getHeader(req, name) {
   return Array.isArray(value) ? (value[0] || '') : (value || '');
 }
 
-function assertSameSlugs(label, expected, actual) {
-  const expectedSet = new Set(expected);
-  const actualSet = new Set(actual);
-  if (
-    expectedSet.size !== expected.length ||
-    actualSet.size !== actual.length ||
-    expectedSet.size !== actualSet.size ||
-    [...expectedSet].some((slug) => !actualSet.has(slug))
-  ) {
-    throw new Error(`${label}不一致：路由=${expected.join(',')}，目录=${actual.join(',')}`);
-  }
-}
-
 function summarizeResponsesRequest(body) {
   const inputTypes = {};
   const toolLabels = {};
@@ -560,150 +562,6 @@ export function resolveModelSelection(model, registryOrRoutes) {
     secrets: {},
   });
   return resolveRegistryModelSelection(model, registry);
-}
-
-async function sendModelList(res, registry, catalogModels) {
-  const dynamicModels = await registry.discoverAll();
-  const legacySlugs = registry.visibleLegacySlugs();
-  const staticData = legacySlugs.map((slug) => ({
-    id: slug,
-    object: 'model',
-    owned_by: 'unified',
-  }));
-  const templateCatalog = catalogModels || registry.knownLegacySlugs().map((slug) => ({
-    slug,
-    display_name: slug,
-  }));
-  const visibleLegacySet = new Set(legacySlugs);
-  const visibleBaseCatalog = templateCatalog.filter((model) => visibleLegacySet.has(model.slug));
-  const dynamicCatalogModels = buildProviderCatalogModels(
-    dynamicModels,
-    templateCatalog,
-    visibleBaseCatalog.length,
-    registry.config,
-  );
-  const canonicalData = registry.config.expose_canonical_models === true
-    ? registry.knownCanonicalModels()
-      .filter((slug) => !slug.startsWith('direct/'))
-      .filter((slug) => !staticData.some((model) => model.id === slug))
-      .map((slug) => ({ id: slug, object: 'model', owned_by: 'unified' }))
-    : [];
-  const canonicalCatalog = registry.config.expose_canonical_models === true
-    ? buildCanonicalCatalogModels(
-      registry,
-      templateCatalog,
-      visibleBaseCatalog.length + dynamicCatalogModels.length,
-    )
-    : [];
-  sendJson(res, 200, {
-    object: 'list',
-    models: [...visibleBaseCatalog, ...canonicalCatalog, ...dynamicCatalogModels],
-    data: [...staticData, ...canonicalData, ...dynamicModels],
-  });
-}
-
-export function buildProviderCatalogModels(dynamicModels, baseCatalog, priorityStart = 0, config = {}) {
-  const templates = new Map(
-    (Array.isArray(baseCatalog) ? baseCatalog : [])
-      .filter((model) => model && typeof model.slug === 'string')
-      .map((model) => [model.slug, model]),
-  );
-  const defaultTemplate = config.dynamic_model_template
-    ? templates.get(config.dynamic_model_template) || {}
-    : {};
-
-  const metadataMap = config.metadata_model_map || {};
-  return (Array.isArray(dynamicModels) ? dynamicModels : []).map((model, index) => {
-    const providerId = model.provider_id || model.id.split('/')[0] || 'provider';
-    const upstreamSlug = model.upstream_model || model.id.slice(`${providerId}/`.length);
-    const templateSlug = templates.has(upstreamSlug)
-      ? upstreamSlug
-      : metadataMap[model.id] || metadataMap[upstreamSlug];
-    const template = templates.get(templateSlug) || defaultTemplate;
-    const providerLabel = model.provider_label || (providerId === 'cpa' ? 'CPA' : providerId);
-    return {
-      ...defaultModelInfo(priorityStart + index + 1),
-      ...template,
-      slug: model.id,
-      display_name: `${providerLabel} · ${upstreamSlug}`,
-      description: `${model.description || `${providerLabel} 动态模型`} · ${upstreamSlug}`,
-      priority: priorityStart + index + 1,
-      additional_speed_tiers: [],
-      service_tiers: [],
-      default_service_tier: null,
-      availability_nux: null,
-      upgrade: null,
-    };
-  });
-}
-
-function buildCanonicalCatalogModels(registry, baseCatalog, priorityStart) {
-  const templates = new Map(
-    (Array.isArray(baseCatalog) ? baseCatalog : [])
-      .filter((model) => model && typeof model.slug === 'string')
-      .map((model) => [model.slug, model]),
-  );
-  const defaultTemplate = registry.config.dynamic_model_template
-    ? templates.get(registry.config.dynamic_model_template) || {}
-    : {};
-  return registry.knownCanonicalModels()
-    .filter((slug) => !slug.startsWith('direct/'))
-    .map((slug, index) => {
-      const modelName = slug.slice(slug.indexOf('/') + 1);
-      const template = templates.get(modelName) || defaultTemplate;
-      return {
-        ...defaultModelInfo(priorityStart + index + 1),
-        ...template,
-        slug,
-        display_name: slug,
-        priority: priorityStart + index + 1,
-      };
-    });
-}
-
-function defaultModelInfo(priority) {
-  return {
-    slug: '',
-    display_name: '',
-    description: null,
-    default_reasoning_level: 'medium',
-    supported_reasoning_levels: [
-      { effort: 'low', description: 'Fast responses with lighter reasoning' },
-      { effort: 'medium', description: 'Balances speed and reasoning depth' },
-      { effort: 'high', description: 'Greater reasoning depth for complex problems' },
-    ],
-    shell_type: 'shell_command',
-    visibility: 'list',
-    supported_in_api: true,
-    priority,
-    additional_speed_tiers: [],
-    service_tiers: [],
-    default_service_tier: null,
-    availability_nux: null,
-    upgrade: null,
-    model_messages: null,
-    include_skills_usage_instructions: false,
-    include_plugin_usage_instructions: false,
-    include_apps_usage_instructions: true,
-    supports_reasoning_summary_parameter: true,
-    default_reasoning_summary: 'none',
-    support_verbosity: true,
-    default_verbosity: 'low',
-    apply_patch_tool_type: 'freeform',
-    web_search_tool_type: 'text_and_image',
-    truncation_policy: { mode: 'tokens', limit: 10000 },
-    supports_parallel_tool_calls: true,
-    supports_image_detail_original: false,
-    context_window: 128000,
-    max_context_window: 128000,
-    effective_context_window_percent: 95,
-    experimental_supported_tools: [],
-    input_modalities: ['text'],
-    supports_search_tool: false,
-    use_responses_lite: true,
-    tool_mode: 'code_mode_only',
-    multi_agent_version: 'v2',
-  };
 }
 
 function relayRestoredMuseJson(res, upRes, status, headers, museContext, logger, slug) {
@@ -1039,7 +897,7 @@ if (isMain()) {
   server.listen(port, host, () => {
     writePidFile(pidFile, process.pid);
     console.log(`[codex-proxy] 已启动：http://${host}:${port}`);
-    console.log(`[codex-proxy] 模型路由：${Object.keys(config.models).join('、')}`);
+    console.log(`[codex-proxy] 模型别名：${[...server.providerRegistry.aliases.keys()].join('、') || '(空)'}`);
     console.log(`[codex-proxy] Provider：${server.providerRegistry?.listProviders().filter((provider) => provider.enabled).map((provider) => provider.id).join('、') || '(空)'}`);
     const configuredProxy = env.PROXY_URL !== undefined
       ? String(env.PROXY_URL).trim()

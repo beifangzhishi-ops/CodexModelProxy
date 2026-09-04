@@ -9,6 +9,7 @@
       "discover_models": true,
       "model_prefix": "cpa/",
       "compat_profile": "openai-auto",
+      "metadata_profile": "generic",
       "network": "default",
       "display_name": "CPA",
       "discovery": {
@@ -27,6 +28,7 @@
       "discover_models": false,
       "model_prefix": "oc/",
       "compat_profile": "deepseek",
+      "metadata_profile": "generic",
       "network": "default"
     },
     "deepseek": {
@@ -38,6 +40,7 @@
       "discover_models": false,
       "model_prefix": "ds/",
       "compat_profile": "deepseek",
+      "metadata_profile": "deepseek",
       "network": "direct"
     },
     "zai": {
@@ -49,6 +52,7 @@
       "discover_models": false,
       "model_prefix": "zai/",
       "compat_profile": "passthrough",
+      "metadata_profile": "zai",
       "network": "default"
     },
     "chatgpt": {
@@ -59,6 +63,7 @@
       "discover_models": false,
       "model_prefix": "chatgpt/",
       "compat_profile": "openai",
+      "metadata_profile": "openai",
       "network": "default"
     }
   }

@@ -2,70 +2,112 @@
   "host": "127.0.0.1",
   "port": 8787,
   "pid_file": "proxy.pid",
-  "model_catalog_file": "models_unified.json",
   "expose_canonical_models": false,
-  "metadata_model_map": {
-    "codex-auto-review": "gpt-5.6-sol",
-    "gpt-5.3-codex-spark": "gpt-5.6-luna",
-    "gpt-5.4": "gpt-5.6-terra",
-    "gpt-5.4-mini": "gpt-5.6-luna",
-    "gpt-5.5": "gpt-5.6-terra",
-    "gpt-image-1.5": "glm-5.3-flash",
-    "gpt-image-2": "glm-5.3-flash"
-  },
   "providers": {
     "chatgpt": {
       "enabled": true,
+      "base_url": "https://chatgpt.com/backend-api/codex",
       "auth_mode": "openai_passthrough",
       "protocol": "responses",
       "discover_models": false,
       "model_prefix": "chatgpt/",
       "compat_profile": "openai",
+      "metadata_profile": "openai",
       "network": "default",
+      "display_name": "ChatGPT",
       "models": {
-        "gpt-5.6-sol": {},
-        "gpt-5.6-terra": {},
-        "gpt-5.6-luna": {}
+        "gpt-5.6-sol": {
+          "display_name": "5.6 Sol"
+        },
+        "gpt-5.6-terra": {
+          "display_name": "5.6 Terra"
+        },
+        "gpt-5.6-luna": {
+          "display_name": "5.6 Luna"
+        }
       }
     },
     "opencode": {
       "enabled": true,
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "api_key_env": "OPENCODE_API_KEY",
       "auth_mode": "api_key",
       "protocol": "responses",
       "discover_models": false,
       "model_prefix": "oc/",
       "compat_profile": "deepseek",
+      "metadata_profile": "generic",
       "network": "default",
+      "display_name": "OC",
       "models": {
-        "deepseek-v4-flash": {},
-        "deepseek-v4-pro": {},
-        "muse-spark-1.2-contributor": {}
+        "deepseek-v4-flash": {
+          "display_name": "OC · DSV4 Flash",
+          "metadata_profile": "deepseek"
+        },
+        "deepseek-v4-pro": {
+          "display_name": "OC · DSV4 Pro",
+          "metadata_profile": "deepseek"
+        },
+        "muse-spark-1.2-contributor": {
+          "display_name": "OC · Muse Spark 1.2 Contributor",
+          "metadata_profile": "muse",
+          "tool_schema_compat": "muse"
+        }
       }
     },
     "deepseek": {
       "enabled": true,
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
       "auth_mode": "api_key",
       "protocol": "responses",
       "discover_models": false,
       "model_prefix": "ds/",
       "compat_profile": "deepseek",
+      "metadata_profile": "deepseek",
       "network": "direct",
+      "display_name": "DS",
       "models": {
-        "deepseek-v4-flash": {},
-        "deepseek-v4-pro": {}
+        "deepseek-v4-flash": {
+          "display_name": "DS · V4 Flash · 直连"
+        },
+        "deepseek-v4-pro": {
+          "display_name": "DS · V4 Pro · 直连"
+        }
       }
     },
     "zai": {
       "enabled": true,
+      "base_url": "https://api.z.ai/api/v1",
+      "api_key_env": "ZAI_API_KEY",
       "auth_mode": "api_key",
       "protocol": "responses",
       "discover_models": false,
       "model_prefix": "zai/",
       "compat_profile": "passthrough",
+      "metadata_profile": "zai",
       "network": "default",
+      "display_name": "ZAI",
       "models": {
-        "glm-5.3": {},
-        "glm-5.3-flash": {}
+        "glm-5.3": {
+          "display_name": "ZAI · GLM-5.3",
+          "metadata": {
+            "input_modalities": ["text"],
+            "default_reasoning_level": "max",
+            "context_window": 1048576,
+            "max_context_window": 1048576
+          }
+        },
+        "glm-5.3-flash": {
+          "display_name": "ZAI · GLM-5.3-Flash",
+          "metadata": {
+            "input_modalities": ["text", "image"],
+            "supports_image_detail_original": true,
+            "default_reasoning_level": "max",
+            "context_window": 1048576,
+            "max_context_window": 1048576
+          }
+        }
       }
     }
   },
@@ -102,85 +144,5 @@
       "model_pattern": "deepseek-*",
       "profile": "deepseek"
     }
-  ],
-  "models": {
-    "gpt-5.6-sol": {
-      "upstream_base_url": "https://chatgpt.com/backend-api/codex",
-      "upstream_model": "gpt-5.6-sol",
-      "auth_mode": "openai_passthrough",
-      "reasoning_format": "openai_encrypted",
-      "tool_output_format": "passthrough"
-    },
-    "gpt-5.6-terra": {
-      "upstream_base_url": "https://chatgpt.com/backend-api/codex",
-      "upstream_model": "gpt-5.6-terra",
-      "auth_mode": "openai_passthrough",
-      "reasoning_format": "openai_encrypted",
-      "tool_output_format": "passthrough"
-    },
-    "gpt-5.6-luna": {
-      "upstream_base_url": "https://chatgpt.com/backend-api/codex",
-      "upstream_model": "gpt-5.6-luna",
-      "auth_mode": "openai_passthrough",
-      "reasoning_format": "openai_encrypted",
-      "tool_output_format": "passthrough"
-    },
-    "deepseek-v4-flash": {
-      "upstream_base_url": "https://opencode.ai/zen/go/v1",
-      "upstream_model": "deepseek-v4-flash",
-      "auth_mode": "api_key",
-      "api_key_env": "OPENCODE_API_KEY",
-      "reasoning_format": "deepseek_plaintext",
-      "tool_output_format": "json_string"
-    },
-    "deepseek-v4-pro": {
-      "upstream_base_url": "https://opencode.ai/zen/go/v1",
-      "upstream_model": "deepseek-v4-pro",
-      "auth_mode": "api_key",
-      "api_key_env": "OPENCODE_API_KEY",
-      "reasoning_format": "deepseek_plaintext",
-      "tool_output_format": "json_string"
-    },
-    "deepseek-v4-flash-direct": {
-      "upstream_base_url": "https://api.deepseek.com/",
-      "upstream_model": "deepseek-v4-flash",
-      "auth_mode": "api_key",
-      "api_key_env": "DEEPSEEK_API_KEY",
-      "reasoning_format": "deepseek_plaintext",
-      "tool_output_format": "json_string"
-    },
-    "deepseek-v4-pro-direct": {
-      "upstream_base_url": "https://api.deepseek.com/",
-      "upstream_model": "deepseek-v4-pro",
-      "auth_mode": "api_key",
-      "api_key_env": "DEEPSEEK_API_KEY",
-      "reasoning_format": "deepseek_plaintext",
-      "tool_output_format": "json_string"
-    },
-    "muse-spark-1.2-contributor": {
-      "upstream_base_url": "https://opencode.ai/zen/go/v1",
-      "upstream_model": "muse-spark-1.2-contributor",
-      "auth_mode": "api_key",
-      "api_key_env": "OPENCODE_API_KEY",
-      "reasoning_format": "openai_encrypted",
-      "tool_output_format": "passthrough",
-      "tool_schema_compat": "muse"
-    },
-    "glm-5.3": {
-      "upstream_base_url": "https://api.z.ai/api/v1",
-      "upstream_model": "glm-5.3",
-      "auth_mode": "api_key",
-      "api_key_env": "ZAI_API_KEY",
-      "reasoning_format": "passthrough",
-      "tool_output_format": "passthrough"
-    },
-    "glm-5.3-flash": {
-      "upstream_base_url": "https://api.z.ai/api/v1",
-      "upstream_model": "glm-5.3-flash",
-      "auth_mode": "api_key",
-      "api_key_env": "ZAI_API_KEY",
-      "reasoning_format": "passthrough",
-      "tool_output_format": "passthrough"
-    }
-  }
+  ]
 }
