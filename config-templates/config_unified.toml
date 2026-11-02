@@ -1,5 +1,5 @@
 model_provider = "OpenAI"
-model = "deepseek-v4-flash"
+model = "chatgpt/gpt-6.1-sol"
 model_reasoning_effort = "max"
 forced_login_method = "chatgpt"
 

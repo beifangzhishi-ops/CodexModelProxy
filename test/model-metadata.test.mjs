@@ -89,7 +89,7 @@ test('model_overrides 可以只覆盖 metadata profile 和显式 metadata', () =
   assert.equal(model.context_window, 200000);
 });
 
-test('静态 alias 不依赖 models_unified.json 也能生成完整模型目录', async () => {
+test('静态 alias 不依赖 retired-model-file.json 也能生成完整模型目录', async () => {
   const server = createProxyServer({
     config: {
       expose_canonical_models: false,
@@ -105,12 +105,12 @@ test('静态 alias 不依赖 models_unified.json 也能生成完整模型目录'
           metadata_profile: 'openai',
           display_name: 'ChatGPT',
           models: {
-            'gpt-5.6-sol': { display_name: '5.6 Sol' },
+            'gpt-fixture-sol': { display_name: '5.6 Sol' },
           },
         },
       },
       aliases: {
-        'gpt-5.6-sol': 'chatgpt/gpt-5.6-sol',
+        'gpt-fixture-sol': 'chatgpt/gpt-fixture-sol',
       },
     },
     localConfig: { providers: {} },
@@ -126,8 +126,8 @@ test('静态 alias 不依赖 models_unified.json 也能生成完整模型目录'
     const response = await fetch(`${baseUrl}/v1/models`);
     assert.equal(response.status, 200);
     const payload = await response.json();
-    assert.deepEqual(payload.data.map((item) => item.id), ['gpt-5.6-sol']);
-    assert.deepEqual(payload.models.map((item) => item.slug), ['gpt-5.6-sol']);
+    assert.deepEqual(payload.data.map((item) => item.id), ['gpt-fixture-sol']);
+    assert.deepEqual(payload.models.map((item) => item.slug), ['gpt-fixture-sol']);
     assert.equal(payload.models[0].display_name, '5.6 Sol');
     assert.equal(hasRequiredInstructions(payload.models[0]), true);
   } finally {

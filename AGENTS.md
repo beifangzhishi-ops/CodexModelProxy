@@ -1,11 +1,21 @@
 # CodexModelProxy 项目规则
 
-## 禁止agent重启模型代理
+## 工作边界
+- **禁止 Agent 自行启动、停止或重启运行中的 CMP**，避免当前 Codex 会话断线。只允许静态检查和模拟上游的本地测试，真实部署由用户安排。
+- CMP 只支持 Responses API；不得通过 Chat Completions 协议转换冒充 Responses 兼容性。
+- GPT 登录凭据只能转发至 ChatGPT 官方后端；其他 Provider 必须使用各自独立 API Key，不得记录或泄露任何真实认证信息。
+- GPT 模型目录通过当前请求凭据实时获取，不建立 CMP 端多账号缓存。其他 Provider 使用现有短时缓存机制。
+- 不在代码、测试、README、示例配置中保留已失效的固定模型名单、无用别名或旧迁移入口。若确需兼容旧客户端，先征得用户同意。
+- 不为未知能力编造元数据；模型发现只证明出现在上游目录，不能代替 Responses 多轮工具测试。
 
-agent自行重启模型代理会导致任务终端。
+## 代码与文档
+- 进入项目先阅读 AGENTS.md 和 README.md；README 记录当前状态，AGENTS 记录规则。
+- 优先使用 Provider Registry、Model Discovery 和 Model Catalog 现有模块；删除已废弃的平行实现，而非添加新兼容包装。
+- 新增路由、认证和模型目录逻辑时，至少增加无计费的 mock HTTP 回归测试。
+- 本地 `providers.local.json`、`proxy-secrets.env`、`proxy-local.env` 不进入 Git，也不得覆盖两台电脑各自的实际密钥。
 
 ## 更新与推送
-
-- 代码与文档更新统一提交并推送到 `origin/master`。
-- 不再使用 `beta` 作为日常开发或部署分支。
-- 每次更新（包括拉取远程改动、修改代码或文档）完成后，都必须提交并推送；除非用户明确要求不推送，否则不得只提交不推送。
+- 先同步远端最新版本，再修改。
+- 所有代码与文档更新统一提交并推送到 `origin/master`；不使用 `beta` 作为日常开发或部署分支。
+- 修改后必须完整运行测试、检查 Git diff 和状态，推送后再让 6v/noha 都同步到同一个提交。
+- 不得自行修改 Codex 的登录凭据、会话数据库或运行中缓存；`.codex` 清理由独立审查结论和必要授权控制。

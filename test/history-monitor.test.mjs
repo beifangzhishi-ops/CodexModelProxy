@@ -26,7 +26,7 @@ function readEvents(filePath) {
 }
 
 const sensitiveBody = {
-  model: 'deepseek-v4-flash',
+  model: 'deepseek-fixture-flash',
   input: [
     {
       type: 'reasoning',
@@ -70,7 +70,7 @@ test('监控默认关闭时不创建日志文件', () => {
     monitor.startRequest({
       endpoint: '/v1/responses',
       model: sensitiveBody.model,
-      route: { upstream_model: 'deepseek-v4-flash' },
+      route: { upstream_model: 'deepseek-fixture-flash' },
       network: 'direct',
       body: sensitiveBody,
     });
@@ -91,7 +91,7 @@ test('开启监控后记录三类脱敏事件并保持关联 ID', () => {
     const requestId = monitor.startRequest({
       endpoint: '/v1/responses',
       model: sensitiveBody.model,
-      route: { upstream_model: 'deepseek-v4-flash' },
+      route: { upstream_model: 'deepseek-fixture-flash' },
       network: 'direct',
       body: sensitiveBody,
     });
@@ -99,7 +99,7 @@ test('开启监控后记录三类脱敏事件并保持关联 ID', () => {
       requestId,
       endpoint: '/v1/responses',
       model: sensitiveBody.model,
-      upstreamModel: 'deepseek-v4-flash',
+      upstreamModel: 'deepseek-fixture-flash',
       network: 'direct',
       attempt: 1,
       body: sensitiveBody,
@@ -133,7 +133,7 @@ test('开启监控后记录三类脱敏事件并保持关联 ID', () => {
       requestId,
       endpoint: '/v1/responses',
       model: sensitiveBody.model,
-      upstreamModel: 'deepseek-v4-flash',
+      upstreamModel: 'deepseek-fixture-flash',
       network: 'direct',
       attempt: 1,
       status: 503,
@@ -201,8 +201,8 @@ test('监控日志达到上限时轮换为一个 .1 备份', () => {
     });
     const requestId = monitor.startRequest({
       endpoint: '/v1/responses',
-      model: 'deepseek-v4-flash',
-      route: { upstream_model: 'deepseek-v4-flash' },
+      model: 'deepseek-fixture-flash',
+      route: { upstream_model: 'deepseek-fixture-flash' },
       network: 'direct',
       body: { input: [] },
     });

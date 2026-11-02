@@ -15,7 +15,7 @@ function registry() {
           model_prefix: 'oc/',
           compat_profile: 'deepseek',
           network: 'default',
-          models: { 'deepseek-v4-flash': {}, 'muse-spark': {} },
+          models: { 'deepseek-fixture-flash': {}, 'muse-spark': {} },
           model_compatibility: [{ pattern: 'muse-*', profile: 'muse' }],
         },
         deepseek: {
@@ -26,7 +26,7 @@ function registry() {
           model_prefix: 'ds/',
           compat_profile: 'deepseek',
           network: 'direct',
-          models: { 'deepseek-v4-flash': {} },
+          models: { 'deepseek-fixture-flash': {} },
         },
         cpa: {
           base_url: 'https://cpa.example/v1',
@@ -44,13 +44,13 @@ function registry() {
           protocol: 'responses',
           model_prefix: 'chatgpt/',
           compat_profile: 'openai',
-          models: { 'gpt-5.6-sol': {} },
+          models: { 'gpt-fixture-sol': {} },
         },
       },
       aliases: {
-        'deepseek-v4-flash': 'oc/deepseek-v4-flash',
-        'deepseek-v4-flash-direct': 'ds/deepseek-v4-flash',
-        'gpt-5.6-sol': 'chatgpt/gpt-5.6-sol',
+        'deepseek-fixture-flash': 'oc/deepseek-fixture-flash',
+        'deepseek-fixture-flash-direct': 'ds/deepseek-fixture-flash',
+        'gpt-fixture-sol': 'chatgpt/gpt-fixture-sol',
       },
     },
   });
@@ -58,20 +58,16 @@ function registry() {
 
 test('canonical、legacy alias 和 direct/ 请求统一解析', () => {
   const r = registry();
-  const canonical = resolveModelSelection('oc/deepseek-v4-flash', r);
-  const legacy = resolveModelSelection('deepseek-v4-flash', r);
-  const direct = resolveModelSelection('direct/deepseek-v4-flash', r);
+  const canonical = resolveModelSelection('oc/deepseek-fixture-flash', r);
+  const legacy = resolveModelSelection('deepseek-fixture-flash', r);
   assert.equal(canonical.provider_id, 'opencode');
-  assert.equal(legacy.canonicalModel, 'oc/deepseek-v4-flash');
-  assert.equal(direct.provider_id, 'deepseek');
-  assert.equal(direct.route.network, 'direct');
-  assert.equal(direct.route.upstream_model, 'deepseek-v4-flash');
+  assert.equal(legacy.canonicalModel, 'oc/deepseek-fixture-flash');
 });
 
 test('不同 Provider 的同名模型保留各自 URL、key 和网络策略', () => {
   const r = registry();
-  const oc = resolveModelSelection('oc/deepseek-v4-flash', r);
-  const ds = resolveModelSelection('ds/deepseek-v4-flash', r);
+  const oc = resolveModelSelection('oc/deepseek-fixture-flash', r);
+  const ds = resolveModelSelection('ds/deepseek-fixture-flash', r);
   assert.equal(oc.route.upstream_base_url, 'https://opencode.example/v1');
   assert.equal(oc.route.provider_api_key, 'oc-key');
   assert.equal(oc.route.network, 'default');
@@ -83,7 +79,7 @@ test('不同 Provider 的同名模型保留各自 URL、key 和网络策略', ()
 test('动态 Provider 接受未出现在缓存中的模型并按名称选择 profile', () => {
   const r = registry();
   const gpt = resolveModelSelection('cpa/gpt-new', r);
-  const deepseek = resolveModelSelection('cpa/deepseek-v4-flash', r);
+  const deepseek = resolveModelSelection('cpa/deepseek-fixture-flash', r);
   const other = resolveModelSelection('cpa/claude-new', r);
   assert.equal(gpt.ok, true);
   assert.equal(gpt.route.compat_profile, 'openai');

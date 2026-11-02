@@ -9,23 +9,13 @@
       "base_url": "https://chatgpt.com/backend-api/codex",
       "auth_mode": "openai_passthrough",
       "protocol": "responses",
-      "discover_models": false,
+      "discover_models": true,
       "model_prefix": "chatgpt/",
       "compat_profile": "openai",
       "metadata_profile": "openai",
       "network": "default",
       "display_name": "ChatGPT",
-      "models": {
-        "gpt-5.6-sol": {
-          "display_name": "5.6 Sol"
-        },
-        "gpt-5.6-terra": {
-          "display_name": "5.6 Terra"
-        },
-        "gpt-5.6-luna": {
-          "display_name": "5.6 Luna"
-        }
-      }
+      "models": {}
     },
     "opencode": {
       "enabled": true,
@@ -33,23 +23,15 @@
       "api_key_env": "OPENCODE_API_KEY",
       "auth_mode": "api_key",
       "protocol": "responses",
-      "discover_models": false,
+      "discover_models": true,
       "model_prefix": "oc/",
       "compat_profile": "deepseek",
       "metadata_profile": "generic",
       "network": "default",
       "display_name": "OC",
-      "models": {
-        "deepseek-v4-flash": {
-          "display_name": "OC · DSV4 Flash",
-          "metadata_profile": "deepseek"
-        },
-        "deepseek-v4-pro": {
-          "display_name": "OC · DSV4 Pro",
-          "metadata_profile": "deepseek"
-        },
-        "muse-spark-1.2-contributor": {
-          "display_name": "OC · Muse Spark 1.2 Contributor",
+      "models": {},
+      "model_overrides": {
+        "muse-*": {
           "metadata_profile": "muse",
           "tool_schema_compat": "muse"
         }
@@ -61,20 +43,13 @@
       "api_key_env": "DEEPSEEK_API_KEY",
       "auth_mode": "api_key",
       "protocol": "responses",
-      "discover_models": false,
+      "discover_models": true,
       "model_prefix": "ds/",
       "compat_profile": "deepseek",
       "metadata_profile": "deepseek",
       "network": "direct",
       "display_name": "DS",
-      "models": {
-        "deepseek-v4-flash": {
-          "display_name": "DS · V4 Flash · 直连"
-        },
-        "deepseek-v4-pro": {
-          "display_name": "DS · V4 Pro · 直连"
-        }
-      }
+      "models": {}
     },
     "zai": {
       "enabled": true,
@@ -82,53 +57,31 @@
       "api_key_env": "ZAI_API_KEY",
       "auth_mode": "api_key",
       "protocol": "responses",
-      "discover_models": false,
+      "discover_models": true,
       "model_prefix": "zai/",
       "compat_profile": "passthrough",
       "metadata_profile": "zai",
       "network": "default",
       "display_name": "ZAI",
-      "models": {
-        "glm-5.3": {
-          "display_name": "ZAI · GLM-5.3",
-          "metadata": {
-            "input_modalities": ["text"],
-            "default_reasoning_level": "max",
-            "context_window": 1048576,
-            "max_context_window": 1048576
-          }
-        },
-        "glm-5.3-flash": {
-          "display_name": "ZAI · GLM-5.3-Flash",
-          "metadata": {
-            "input_modalities": ["text", "image"],
-            "supports_image_detail_original": true,
-            "default_reasoning_level": "max",
-            "context_window": 1048576,
-            "max_context_window": 1048576
-          }
-        }
-      }
+      "models": {}
+    },
+    "kimi": {
+      "enabled": false,
+      "base_url": "https://api.moonshot.cn/v1",
+      "api_key_env": "MOONSHOT_API_KEY",
+      "auth_mode": "api_key",
+      "protocol": "responses",
+      "discover_models": true,
+      "model_prefix": "kimi/",
+      "compat_profile": "passthrough",
+      "metadata_profile": "generic",
+      "network": "default",
+      "display_name": "Kimi",
+      "models": {}
     }
   },
-  "aliases": {
-    "gpt-5.6-sol": "chatgpt/gpt-5.6-sol",
-    "gpt-5.6-terra": "chatgpt/gpt-5.6-terra",
-    "gpt-5.6-luna": "chatgpt/gpt-5.6-luna",
-    "deepseek-v4-flash": "oc/deepseek-v4-flash",
-    "deepseek-v4-pro": "oc/deepseek-v4-pro",
-    "deepseek-v4-flash-direct": "ds/deepseek-v4-flash",
-    "deepseek-v4-pro-direct": "ds/deepseek-v4-pro",
-    "muse-spark-1.2-contributor": "oc/muse-spark-1.2-contributor",
-    "glm-5.3": "zai/glm-5.3",
-    "glm-5.3-flash": "zai/glm-5.3-flash"
-  },
+  "aliases": {},
   "compatibility_overrides": [
-    {
-      "provider": "opencode",
-      "model_pattern": "muse-*",
-      "profile": "muse"
-    },
     {
       "provider": "cpa",
       "model_pattern": "gpt-*",

@@ -29,13 +29,8 @@ function createLegacyRegistry() {
 test('direct/* alias 保留请求解析能力但不进入公开模型目录', () => {
   const registry = createLegacyRegistry();
 
-  assert.equal(registry.aliases.get('direct/alpha'), 'foo/alpha');
   assert.deepEqual(visiblePublicSlugs(registry), ['alpha']);
 
-  const directSelection = resolveModelSelection('direct/alpha', registry);
-  assert.equal(directSelection.ok, true);
-  assert.equal(directSelection.canonicalModel, 'foo/alpha');
-  assert.equal(directSelection.route.network, 'direct');
 
   const legacyViews = deriveLegacyViews(registry);
   assert.deepEqual(Object.keys(legacyViews.models), ['alpha']);

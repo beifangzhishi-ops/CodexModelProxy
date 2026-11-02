@@ -16,16 +16,16 @@ import {
 import { resolveModelSelection } from '../model-resolver.mjs';
 
 const MODEL_SLUGS = [
-  'gpt-5.6-sol',
-  'gpt-5.6-terra',
-  'gpt-5.6-luna',
-  'deepseek-v4-flash',
-  'deepseek-v4-pro',
-  'deepseek-v4-flash-direct',
-  'deepseek-v4-pro-direct',
-  'muse-spark-1.2-contributor',
-  'glm-5.3',
-  'glm-5.3-flash',
+  'gpt-fixture-sol',
+  'gpt-fixture-terra',
+  'gpt-fixture-luna',
+  'deepseek-fixture-flash',
+  'deepseek-fixture-pro',
+  'deepseek-fixture-flash-direct',
+  'deepseek-fixture-pro-direct',
+  'muse-fixture',
+  'glm-fixture',
+  'glm-fixture-flash',
 ];
 
 const silentLogger = { info() {}, error() {}, warn() {} };
@@ -55,79 +55,79 @@ test('直连白名单只改变上游代理选择', () => {
 
 function testRoutes(mockBaseUrl) {
   return {
-    'gpt-5.6-sol': {
+    'gpt-fixture-sol': {
       upstream_base_url: mockBaseUrl,
-      upstream_model: 'gpt-5.6-sol',
+      upstream_model: 'gpt-fixture-sol',
       auth_mode: 'openai_passthrough',
       reasoning_format: 'openai_encrypted',
       tool_output_format: 'passthrough',
     },
-    'gpt-5.6-terra': {
+    'gpt-fixture-terra': {
       upstream_base_url: mockBaseUrl,
-      upstream_model: 'gpt-5.6-terra',
+      upstream_model: 'gpt-fixture-terra',
       auth_mode: 'openai_passthrough',
       reasoning_format: 'openai_encrypted',
       tool_output_format: 'passthrough',
     },
-    'gpt-5.6-luna': {
+    'gpt-fixture-luna': {
       upstream_base_url: mockBaseUrl,
-      upstream_model: 'gpt-5.6-luna',
+      upstream_model: 'gpt-fixture-luna',
       auth_mode: 'openai_passthrough',
       reasoning_format: 'openai_encrypted',
       tool_output_format: 'passthrough',
     },
-    'deepseek-v4-flash': {
+    'deepseek-fixture-flash': {
       upstream_base_url: mockBaseUrl,
-      upstream_model: 'deepseek-v4-flash',
+      upstream_model: 'deepseek-fixture-flash',
       auth_mode: 'api_key',
       api_key_env: 'OPENCODE_API_KEY',
       reasoning_format: 'deepseek_plaintext',
       tool_output_format: 'json_string',
     },
-    'deepseek-v4-pro': {
+    'deepseek-fixture-pro': {
       upstream_base_url: mockBaseUrl,
-      upstream_model: 'deepseek-v4-pro',
+      upstream_model: 'deepseek-fixture-pro',
       auth_mode: 'api_key',
       api_key_env: 'OPENCODE_API_KEY',
       reasoning_format: 'deepseek_plaintext',
       tool_output_format: 'json_string',
     },
-    'deepseek-v4-flash-direct': {
+    'deepseek-fixture-flash-direct': {
       upstream_base_url: mockBaseUrl,
-      upstream_model: 'deepseek-v4-flash',
+      upstream_model: 'deepseek-fixture-flash',
       auth_mode: 'api_key',
       api_key_env: 'DEEPSEEK_API_KEY',
       reasoning_format: 'deepseek_plaintext',
       tool_output_format: 'json_string',
     },
-    'deepseek-v4-pro-direct': {
+    'deepseek-fixture-pro-direct': {
       upstream_base_url: mockBaseUrl,
-      upstream_model: 'deepseek-v4-pro',
+      upstream_model: 'deepseek-fixture-pro',
       auth_mode: 'api_key',
       api_key_env: 'DEEPSEEK_API_KEY',
       reasoning_format: 'deepseek_plaintext',
       tool_output_format: 'json_string',
     },
-    'muse-spark-1.2-contributor': {
+    'muse-fixture': {
       upstream_base_url: mockBaseUrl,
-      upstream_model: 'muse-spark-1.2-contributor',
+      upstream_model: 'muse-fixture',
       auth_mode: 'api_key',
       api_key_env: 'OPENCODE_API_KEY',
       reasoning_format: 'openai_encrypted',
       tool_output_format: 'passthrough',
       tool_schema_compat: 'muse',
     },
-    'glm-5.3': {
+    'glm-fixture': {
       upstream_base_url: mockBaseUrl,
-      upstream_model: 'glm-5.3',
+      upstream_model: 'glm-fixture',
       auth_mode: 'api_key',
       api_key_env: 'ZAI_API_KEY',
       reasoning_format: 'passthrough',
       tool_output_format: 'passthrough',
     },
-    'glm-5.3-flash': {
+    'glm-fixture-flash': {
       upstream_base_url: mockBaseUrl,
-      upstream_model: 'glm-5.3-flash',
+      upstream_model: 'glm-fixture-flash',
       auth_mode: 'api_key',
       api_key_env: 'ZAI_API_KEY',
       reasoning_format: 'passthrough',
@@ -139,10 +139,10 @@ function testRoutes(mockBaseUrl) {
 function testCatalog() {
   return {
     models: MODEL_SLUGS.map((slug) => {
-      if (slug === 'glm-5.3') {
+      if (slug === 'glm-fixture') {
         return { slug, display_name: slug, input_modalities: ['text'] };
       }
-      if (slug === 'glm-5.3-flash') {
+      if (slug === 'glm-fixture-flash') {
         return { slug, display_name: slug, input_modalities: ['text', 'image'], supports_image_detail_original: true };
       }
       return {
@@ -361,14 +361,12 @@ test('健康检查与模型列表只展示真实静态通道，GLM-5.3 能力保
     const modelsJson = await modelsRes.json();
     assert.deepEqual(modelsJson.data.map((model) => model.id), MODEL_SLUGS);
     assert.deepEqual(modelsJson.models.map((model) => model.slug), MODEL_SLUGS);
-    assert.ok(modelsJson.data.every((model) => !model.id.startsWith('direct/')));
-    assert.ok(modelsJson.models.every((model) => !model.slug.startsWith('direct/')));
-    const glm = modelsJson.models.find((model) => model.slug === 'glm-5.3');
+    const glm = modelsJson.models.find((model) => model.slug === 'glm-fixture');
     assert.deepEqual(glm.input_modalities, ['text']);
-    const glmFlash = modelsJson.models.find((model) => model.slug === 'glm-5.3-flash');
+    const glmFlash = modelsJson.models.find((model) => model.slug === 'glm-fixture-flash');
     assert.deepEqual(glmFlash.input_modalities, ['text', 'image']);
     assert.equal(glmFlash.supports_image_detail_original, true);
-    const imageModels = modelsJson.models.filter((model) => model.slug !== 'glm-5.3');
+    const imageModels = modelsJson.models.filter((model) => model.slug !== 'glm-fixture');
     assert.ok(imageModels.every((model) => model.input_modalities.includes('image')));
     assert.ok(imageModels.every((model) => model.supports_image_detail_original === true));
     assert.equal(mock.seen.length, 0);
@@ -378,10 +376,10 @@ test('健康检查与模型列表只展示真实静态通道，GLM-5.3 能力保
 test('disabled Provider 保留 alias 的 503 语义且不出现在模型目录', async () => {
   await withCustomServers((baseUrl) => ({
     models: {
-      'deepseek-v4-flash': {
+      'deepseek-fixture-flash': {
         provider_id: 'opencode',
         upstream_base_url: baseUrl,
-        upstream_model: 'deepseek-v4-flash',
+        upstream_model: 'deepseek-fixture-flash',
         auth_mode: 'api_key',
         api_key_env: 'OPENCODE_API_KEY',
         reasoning_format: 'deepseek_plaintext',
@@ -396,7 +394,7 @@ test('disabled Provider 保留 alias 的 503 语义且不出现在模型目录',
         protocol: 'responses',
         model_prefix: 'oc/',
         compat_profile: 'deepseek',
-        models: { 'deepseek-v4-flash': {} },
+        models: { 'deepseek-fixture-flash': {} },
       },
       cpa: {
         enabled: true,
@@ -409,13 +407,13 @@ test('disabled Provider 保留 alias 的 503 语义且不出现在模型目录',
         compat_profile: 'openai-auto',
       },
     },
-    aliases: { 'deepseek-v4-flash': 'oc/deepseek-v4-flash' },
-    metadata_model_map: { 'gpt-current': 'gpt-5.6-sol' },
+    aliases: { 'deepseek-fixture-flash': 'oc/deepseek-fixture-flash' },
+    metadata_model_map: { 'gpt-current': 'gpt-fixture-sol' },
     catalog: {
       models: [
-        { slug: 'deepseek-v4-flash', display_name: 'OC disabled' },
+        { slug: 'deepseek-fixture-flash', display_name: 'OC disabled' },
         {
-          slug: 'gpt-5.6-sol',
+          slug: 'gpt-fixture-sol',
           display_name: 'GPT template',
           input_modalities: ['text', 'image'],
           supports_image_detail_original: true,
@@ -425,8 +423,8 @@ test('disabled Provider 保留 alias 的 503 语义且不出现在模型目录',
   }), {
     discoveryFetchModels: async () => ({ data: [{ id: 'gpt-current' }] }),
   }, async (mock, proxy) => {
-    const aliasSelection = resolveModelSelection('deepseek-v4-flash', proxy.server.providerRegistry);
-    const canonicalSelection = resolveModelSelection('oc/deepseek-v4-flash', proxy.server.providerRegistry);
+    const aliasSelection = resolveModelSelection('deepseek-fixture-flash', proxy.server.providerRegistry);
+    const canonicalSelection = resolveModelSelection('oc/deepseek-fixture-flash', proxy.server.providerRegistry);
     assert.equal(aliasSelection.status, 503);
     assert.equal(canonicalSelection.status, 503);
 
@@ -434,8 +432,8 @@ test('disabled Provider 保留 alias 的 503 语义且不出现在模型目录',
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.deepEqual(payload.data.map((model) => model.id), ['cpa/gpt-current']);
-    assert.ok(payload.models.every((model) => model.slug !== 'deepseek-v4-flash'));
-    assert.ok(payload.models.every((model) => model.slug !== 'oc/deepseek-v4-flash'));
+    assert.ok(payload.models.every((model) => model.slug !== 'deepseek-fixture-flash'));
+    assert.ok(payload.models.every((model) => model.slug !== 'oc/deepseek-fixture-flash'));
     const dynamic = payload.models.find((model) => model.slug === 'cpa/gpt-current');
     assert.deepEqual(dynamic.input_modalities, ['text', 'image']);
     assert.equal(dynamic.supports_image_detail_original, true);
@@ -492,27 +490,27 @@ test('模型级 enabled:false 保留 alias 构建但不放行请求或模型目�
 test('十个静态模型均请求 /responses，模型名和密钥按路由隔离', async () => {
   await withServers(async (mock, proxy) => {
     const gptHeaders = { authorization: 'Bearer chatgpt-login-token', 'chatgpt-account-id': 'acct-test' };
-    for (const slug of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
+    for (const slug of ['gpt-fixture-sol', 'gpt-fixture-terra', 'gpt-fixture-luna']) {
       const result = await postJson(proxy.baseUrl, { model: slug, input: [{ type: 'input_text', text: 'hello' }] }, gptHeaders);
       assert.equal(result.status, 200);
     }
-    for (const slug of ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-direct', 'deepseek-v4-pro-direct', 'muse-spark-1.2-contributor', 'glm-5.3', 'glm-5.3-flash']) {
+    for (const slug of ['deepseek-fixture-flash', 'deepseek-fixture-pro', 'deepseek-fixture-flash-direct', 'deepseek-fixture-pro-direct', 'muse-fixture', 'glm-fixture', 'glm-fixture-flash']) {
       const result = await postJson(proxy.baseUrl, { model: slug, input: 'hello' });
       assert.equal(result.status, 200);
     }
 
     assert.deepEqual(mock.seen.map((request) => request.url), Array(10).fill('/responses'));
     assert.deepEqual(mock.seen.map((request) => request.body.model), [
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
-      'deepseek-v4-flash',
-      'deepseek-v4-pro',
-      'deepseek-v4-flash',
-      'deepseek-v4-pro',
-      'muse-spark-1.2-contributor',
-      'glm-5.3',
-      'glm-5.3-flash',
+      'gpt-fixture-sol',
+      'gpt-fixture-terra',
+      'gpt-fixture-luna',
+      'deepseek-fixture-flash',
+      'deepseek-fixture-pro',
+      'deepseek-fixture-flash',
+      'deepseek-fixture-pro',
+      'muse-fixture',
+      'glm-fixture',
+      'glm-fixture-flash',
     ]);
     assert.deepEqual(mock.seen.slice(0, 3).map((request) => request.auth), Array(3).fill('Bearer chatgpt-login-token'));
     assert.deepEqual(mock.seen.slice(0, 3).map((request) => request.accountId), Array(3).fill('acct-test'));
@@ -627,23 +625,6 @@ test('compact 使用模型级 key 优先级并回退到 Provider key', async () 
       'Bearer model-key',
       'Bearer provider-model-key',
       'Bearer provider-key',
-    ]);
-  });
-});
-
-test('direct/ 前缀剥离后复用原静态路由，无前缀行为保持不变', async () => {
-  await withServers(async (mock, proxy) => {
-    const auth = { authorization: 'Bearer chatgpt-login-token' };
-    const prefixed = await postJson(proxy.baseUrl, { model: 'direct/gpt-5.6-sol', input: 'hello' }, auth);
-    const legacy = await postJson(proxy.baseUrl, { model: 'gpt-5.6-sol', input: 'hello' }, auth);
-    const deepseek = await postJson(proxy.baseUrl, { model: 'direct/deepseek-v4-flash', input: 'hello' });
-    assert.equal(prefixed.status, 200);
-    assert.equal(legacy.status, 200);
-    assert.equal(deepseek.status, 200);
-    assert.deepEqual(mock.seen.map((request) => request.body.model), [
-      'gpt-5.6-sol',
-      'gpt-5.6-sol',
-      'deepseek-v4-flash',
     ]);
   });
 });
@@ -806,7 +787,7 @@ test('CPA 与订阅直通并发请求的模型、认证和账号头互不污染'
     const [directResult, cpaResult] = await Promise.all([
       postJson(
         proxy.baseUrl,
-        { model: 'direct/gpt-5.6-sol', input: 'direct' },
+        { model: 'gpt-fixture-sol', input: 'direct' },
         { authorization: 'Bearer chatgpt-token', 'chatgpt-account-id': 'chatgpt-account' },
       ),
       postJson(
@@ -817,7 +798,7 @@ test('CPA 与订阅直通并发请求的模型、认证和账号头互不污染'
     ]);
     assert.equal(directResult.status, 200);
     assert.equal(cpaResult.status, 200);
-    const directRequest = mock.seen.find((request) => request.body.model === 'gpt-5.6-sol');
+    const directRequest = mock.seen.find((request) => request.body.model === 'gpt-fixture-sol');
     const cpaRequest = mock.seen.find((request) => request.body.model === 'gpt-cpa-one');
     assert.equal(directRequest.auth, 'Bearer chatgpt-token');
     assert.equal(directRequest.accountId, 'chatgpt-account');
@@ -840,27 +821,27 @@ test('canonical 默认不展示但仍可解析并转发', async () => {
     }
 
     const gpt = await postJson(proxy.baseUrl, {
-      model: 'chatgpt/gpt-5.6-terra',
+      model: 'chatgpt/gpt-fixture-terra',
       input: 'hello',
     }, { authorization: 'Bearer chatgpt-token' });
     const oc = await postJson(proxy.baseUrl, {
-      model: 'oc/deepseek-v4-flash',
+      model: 'oc/deepseek-fixture-flash',
       input: 'hello',
     });
     const ds = await postJson(proxy.baseUrl, {
-      model: 'ds/deepseek-v4-flash',
+      model: 'ds/deepseek-fixture-flash',
       input: 'hello',
     });
     const zai = await postJson(proxy.baseUrl, {
-      model: 'zai/glm-5.3',
+      model: 'zai/glm-fixture',
       input: 'hello',
     });
     assert.deepEqual([gpt.status, oc.status, ds.status, zai.status], [200, 200, 200, 200]);
     assert.deepEqual(mock.seen.slice(1).map((request) => request.body.model), [
-      'gpt-5.6-terra',
-      'deepseek-v4-flash',
-      'deepseek-v4-flash',
-      'glm-5.3',
+      'gpt-fixture-terra',
+      'deepseek-fixture-flash',
+      'deepseek-fixture-flash',
+      'glm-fixture',
     ]);
   }, {
     configOverrides: (baseUrl) => ({
@@ -873,9 +854,9 @@ test('canonical 默认不展示但仍可解析并转发', async () => {
           model_prefix: 'chatgpt/',
           compat_profile: 'openai',
           models: {
-            'gpt-5.6-sol': {},
-            'gpt-5.6-terra': {},
-            'gpt-5.6-luna': {},
+            'gpt-fixture-sol': {},
+            'gpt-fixture-terra': {},
+            'gpt-fixture-luna': {},
           },
         },
         opencode: {
@@ -886,8 +867,8 @@ test('canonical 默认不展示但仍可解析并转发', async () => {
           model_prefix: 'oc/',
           compat_profile: 'deepseek',
           models: {
-            'deepseek-v4-flash': {},
-            'deepseek-v4-pro': {},
+            'deepseek-fixture-flash': {},
+            'deepseek-fixture-pro': {},
           },
         },
         deepseek: {
@@ -899,8 +880,8 @@ test('canonical 默认不展示但仍可解析并转发', async () => {
           compat_profile: 'deepseek',
           network: 'direct',
           models: {
-            'deepseek-v4-flash': {},
-            'deepseek-v4-pro': {},
+            'deepseek-fixture-flash': {},
+            'deepseek-fixture-pro': {},
           },
         },
         zai: {
@@ -911,8 +892,8 @@ test('canonical 默认不展示但仍可解析并转发', async () => {
           model_prefix: 'zai/',
           compat_profile: 'passthrough',
           models: {
-            'glm-5.3': {},
-            'glm-5.3-flash': {},
+            'glm-fixture': {},
+            'glm-fixture-flash': {},
           },
         },
       },
@@ -946,14 +927,14 @@ test('Muse 路由补齐工具 required，其他路由与原请求体保持不变
       },
     ];
     const museBody = {
-      model: 'muse-spark-1.2-contributor',
+      model: 'muse-fixture',
       input: 'hello',
       tools: JSON.parse(JSON.stringify(tools)),
     };
     const museResult = await postJson(proxy.baseUrl, museBody);
     assert.equal(museResult.status, 200);
     const museSeen = mock.seen[0];
-    assert.equal(museSeen.body.model, 'muse-spark-1.2-contributor');
+    assert.equal(museSeen.body.model, 'muse-fixture');
     assert.equal(museSeen.body.tools[0].type, 'function');
     assert.equal(museSeen.body.tools[0].name, 'tool_search');
     assert.deepEqual(museSeen.body.tools[0].parameters.required, ['query', 'limit']);
@@ -961,7 +942,7 @@ test('Muse 路由补齐工具 required，其他路由与原请求体保持不变
     assert.deepEqual(museBody.tools[0].parameters.required, ['query']);
 
     const dsResult = await postJson(proxy.baseUrl, {
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-fixture-flash',
       input: 'hello',
       tools: JSON.parse(JSON.stringify(tools)),
     });
@@ -974,7 +955,7 @@ test('Muse 桥接把 namespace/custom/web_search 展平为上游可接受的工�
   await withServers(async (mock, proxy) => {
     const longName = 'mcp__codex_apps__github__list_repository_pull_request_review_comments_for_branch';
     const result = await postJson(proxy.baseUrl, {
-      model: 'muse-spark-1.2-contributor',
+      model: 'muse-fixture',
       input: [
         { type: 'input_text', text: 'hello' },
         {
@@ -1039,7 +1020,7 @@ test('Muse 桥接把 namespace/custom/web_search 展平为上游可接受的工�
 test('GLM 路由直通：reasoning、工具输出、工具定义与 SSE 均原样转发（含 Flash）', async () => {
   await withServers(async (mock, proxy) => {
     const body = {
-      model: 'glm-5.3',
+      model: 'glm-fixture',
       input: [
         { type: 'input_text', text: 'hello' },
         {
@@ -1061,18 +1042,18 @@ test('GLM 路由直通：reasoning、工具输出、工具定义与 SSE 均原�
     const result = await postJson(proxy.baseUrl, body);
     assert.equal(result.status, 200);
     assert.equal(mock.seen[0].auth, 'Bearer test-zai-key');
-    assert.deepEqual(mock.seen[0].body, { ...body, model: 'glm-5.3' });
+    assert.deepEqual(mock.seen[0].body, { ...body, model: 'glm-fixture' });
 
-    const sse = await postJson(proxy.baseUrl, { model: 'glm-5.3', stream: true, input: 'hello' });
+    const sse = await postJson(proxy.baseUrl, { model: 'glm-fixture', stream: true, input: 'hello' });
     assert.equal(sse.status, 200);
     assert.equal(sse.headers.get('x-upstream-marker'), 'sse-preserved');
     assert.equal(sse.text, 'data: {"type":"response.output_text.delta","delta":"hello"}\n\ndata: {"type":"response.completed"}\n\n');
-    const flashBody = { ...body, model: 'glm-5.3-flash' };
+    const flashBody = { ...body, model: 'glm-fixture-flash' };
     const flashResult = await postJson(proxy.baseUrl, flashBody);
     assert.equal(flashResult.status, 200);
     assert.equal(mock.seen[2].auth, 'Bearer test-zai-key');
-    assert.deepEqual(mock.seen[2].body, { ...flashBody, model: 'glm-5.3-flash' });
-    assert.equal(mock.seen[2].body.model, 'glm-5.3-flash');
+    assert.deepEqual(mock.seen[2].body, { ...flashBody, model: 'glm-fixture-flash' });
+    assert.equal(mock.seen[2].body.model, 'glm-fixture-flash');
   });
 });
 
@@ -1101,7 +1082,7 @@ test('路由 tool_schema_compat 只接受 muse', () => {
 test('请求体除 model 外保持一致，JSON 响应状态、头和正文原样返回', async () => {
   await withServers(async (mock, proxy) => {
     const body = {
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-fixture-flash',
       input: [{ type: 'input_text', text: 'hello' }],
       tools: [{ type: 'function', name: 'demo', parameters: { type: 'object' } }],
       previous_response_id: 'resp_previous',
@@ -1114,10 +1095,10 @@ test('请求体除 model 外保持一致，JSON 响应状态、头和正文原�
     assert.deepEqual(JSON.parse(result.text), {
       id: 'resp_test',
       object: 'response',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-fixture-flash',
       output: [],
     });
-    assert.deepEqual(mock.seen[0].body, { ...body, model: 'deepseek-v4-flash' });
+    assert.deepEqual(mock.seen[0].body, { ...body, model: 'deepseek-fixture-flash' });
   });
 });
 
@@ -1125,7 +1106,7 @@ test('SSE 响应原样透传', async () => {
   await withServers(async (mock, proxy) => {
     const result = await postJson(
       proxy.baseUrl,
-      { model: 'gpt-5.6-sol', stream: true, input: 'hello' },
+      { model: 'gpt-fixture-sol', stream: true, input: 'hello' },
       { authorization: 'Bearer chatgpt-login-token' },
     );
     assert.equal(result.status, 200);
@@ -1154,7 +1135,7 @@ test('本地访问令牌使用 X-Proxy-Access-Token，且不覆盖 ChatGPT Autho
     assert.equal(modelsOk.status, 200);
     const result = await postJson(
       proxy.baseUrl,
-      { model: 'gpt-5.6-sol', input: 'hello' },
+      { model: 'gpt-fixture-sol', input: 'hello' },
       { 'X-Proxy-Access-Token': 'secret-token', authorization: 'Bearer chatgpt-login-token' },
     );
     assert.equal(result.status, 200);
@@ -1173,8 +1154,8 @@ test('进程环境变量优先于密钥文件，日志不泄露密钥', async ()
   const logger = { info: (message) => logs.push(message), error: (message) => logs.push(message), warn() {} };
   await withServers(
     async (mock, proxy) => {
-      await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input: 'hello' });
-      await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash-direct', input: 'hello' });
+      await postJson(proxy.baseUrl, { model: 'deepseek-fixture-flash', input: 'hello' });
+      await postJson(proxy.baseUrl, { model: 'deepseek-fixture-flash-direct', input: 'hello' });
       assert.equal(mock.seen[0].auth, 'Bearer env-open-key');
       assert.equal(mock.seen[1].auth, 'Bearer env-deep-key');
       assert.ok(logs.every((message) => !message.includes('env-open-key') && !message.includes('env-deep-key')));
@@ -1198,22 +1179,22 @@ test('普通请求按 DIRECT_MODELS 选择代理或直连', async () => {
     async (mock, proxy) => {
       await postJson(
         proxy.baseUrl,
-        { model: 'gpt-5.6-sol', input: 'hello' },
+        { model: 'gpt-fixture-sol', input: 'hello' },
         { authorization: 'Bearer chatgpt-login-token' },
       );
-      await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input: 'hello' });
-      await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash-direct', input: 'hello' });
-      await postJson(proxy.baseUrl, { model: 'muse-spark-1.2-contributor', input: 'hello' });
-      assert.ok(logs.some((message) => message.includes('model=gpt-5.6-sol network=fixed-proxy')));
-      assert.ok(logs.some((message) => message.includes('model=deepseek-v4-flash network=direct')));
-      assert.ok(logs.some((message) => message.includes('model=deepseek-v4-flash-direct network=direct')));
-      assert.ok(logs.some((message) => message.includes('model=muse-spark-1.2-contributor network=fixed-proxy')));
+      await postJson(proxy.baseUrl, { model: 'deepseek-fixture-flash', input: 'hello' });
+      await postJson(proxy.baseUrl, { model: 'deepseek-fixture-flash-direct', input: 'hello' });
+      await postJson(proxy.baseUrl, { model: 'muse-fixture', input: 'hello' });
+      assert.ok(logs.some((message) => message.includes('model=gpt-fixture-sol network=fixed-proxy')));
+      assert.ok(logs.some((message) => message.includes('model=deepseek-fixture-flash network=direct')));
+      assert.ok(logs.some((message) => message.includes('model=deepseek-fixture-flash-direct network=direct')));
+      assert.ok(logs.some((message) => message.includes('model=muse-fixture network=fixed-proxy')));
       assert.equal(mock.seen.length, 4);
     },
     {
       env: {
         PROXY_URL: 'http://127.0.0.1:7890',
-        DIRECT_MODELS: ' deepseek-v4-flash, deepseek-v4-flash-direct ',
+        DIRECT_MODELS: ' deepseek-fixture-flash, deepseek-fixture-flash-direct ',
       },
       logger,
     },
@@ -1222,7 +1203,7 @@ test('普通请求按 DIRECT_MODELS 选择代理或直连', async () => {
 
 test('缺少 ChatGPT 登录认证、缺少静态密钥和未知模型均不访问上游', async () => {
   await withServers(async (mock, proxy) => {
-    const noGptAuth = await postJson(proxy.baseUrl, { model: 'gpt-5.6-sol', input: 'hello' });
+    const noGptAuth = await postJson(proxy.baseUrl, { model: 'gpt-fixture-sol', input: 'hello' });
     assert.equal(noGptAuth.status, 401);
 
     const unknown = await postJson(proxy.baseUrl, { model: 'unknown-model', input: 'hello' });
@@ -1237,52 +1218,24 @@ test('缺少 ChatGPT 登录认证、缺少静态密钥和未知模型均不访�
 
 test('上游错误状态、响应头和正文保持不变', async () => {
   await withServers(async (mock, proxy) => {
-    const result = await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', trigger_error: true });
+    const result = await postJson(proxy.baseUrl, { model: 'deepseek-fixture-flash', trigger_error: true });
     assert.equal(result.status, 503);
     assert.equal(result.headers.get('x-upstream-marker'), 'error-preserved');
     assert.equal(result.text, '{"error":{"type":"upstream_test_error","message":"preserve me"}}');
   });
 });
 
-test('生产配置的静态路由与基础模型目录严格对应', () => {
+test('production config discovers models rather than pinning model versions', () => {
   const config = loadConfig();
   assert.equal(config.expose_canonical_models, false);
-  assert.deepEqual(Object.keys(config.models), MODEL_SLUGS);
-  assert.deepEqual(config.catalog.models.map((model) => model.slug), MODEL_SLUGS);
-  assert.equal(config.models['deepseek-v4-flash'].auth_mode, 'api_key');
-  assert.equal(config.models['gpt-5.6-sol'].auth_mode, 'openai_passthrough');
-  assert.equal(config.models['glm-5.3'].auth_mode, 'api_key');
-  assert.equal(config.models['glm-5.3'].api_key_env, 'ZAI_API_KEY');
-  assert.equal(config.models['glm-5.3'].upstream_model, 'glm-5.3');
-  assert.equal(config.models['glm-5.3'].upstream_base_url, 'https://api.z.ai/api/v1');
-  assert.equal(config.models['glm-5.3'].reasoning_format, 'passthrough');
-  assert.equal(config.models['glm-5.3-flash'].auth_mode, 'api_key');
-  assert.equal(config.models['glm-5.3-flash'].api_key_env, 'ZAI_API_KEY');
-  assert.equal(config.models['glm-5.3-flash'].upstream_model, 'glm-5.3-flash');
-  assert.equal(config.models['glm-5.3-flash'].upstream_base_url, 'https://api.z.ai/api/v1');
-  assert.equal(config.models['glm-5.3-flash'].reasoning_format, 'passthrough');
-  for (const slug of [
-    'deepseek-v4-flash',
-    'deepseek-v4-pro',
-    'deepseek-v4-flash-direct',
-    'deepseek-v4-pro-direct',
-  ]) {
-    assert.equal(config.models[slug].tool_output_format, 'json_string');
+  assert.deepEqual(Object.keys(config.models), []);
+  assert.deepEqual(Object.keys(config.aliases), []);
+  for (const name of ['chatgpt', 'deepseek', 'opencode', 'zai', 'kimi']) {
+    assert.equal(config.providers[name].discover_models, true);
+    assert.deepEqual(config.providers[name].models, {});
   }
-  for (const slug of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'glm-5.3', 'glm-5.3-flash']) {
-    assert.equal(config.models[slug].tool_output_format, 'passthrough');
-  }
-  const glm = config.catalog.models.find((model) => model.slug === 'glm-5.3');
-  assert.deepEqual(glm.input_modalities, ['text']);
-  assert.equal(glm.default_reasoning_level, 'max');
-  assert.equal(glm.apply_patch_tool_type, 'freeform');
-  assert.equal(glm.context_window, 1048576);
-  const glmFlash = config.catalog.models.find((model) => model.slug === 'glm-5.3-flash');
-  assert.deepEqual(glmFlash.input_modalities, ['text', 'image']);
-  assert.equal(glmFlash.supports_image_detail_original, true);
-  assert.equal(glmFlash.default_reasoning_level, 'max');
-  assert.equal(glmFlash.apply_patch_tool_type, 'freeform');
-  assert.equal(glmFlash.context_window, 1048576);
+  assert.equal(config.providers.kimi.enabled, false);
+  assert.equal(config.providers.chatgpt.auth_mode, 'openai_passthrough');
 });
 
 test('密钥文件缺失时返回空对象', () => {
@@ -1339,7 +1292,7 @@ const userMessageFixture = {
 test('发往 GPT 时保留 DS reasoning 项，仅清空其明文 content', async () => {
   await withServers(async (mock, proxy) => {
     const body = {
-      model: 'gpt-5.6-sol',
+      model: 'gpt-fixture-sol',
       input: [dsReasoningFixture, gptReasoningFixture, userMessageFixture],
     };
     const result = await postJson(
@@ -1359,7 +1312,7 @@ test('发往 GPT 时保留 DS reasoning 项，仅清空其明文 content', async
 test('发往 DS 时保留 GPT reasoning 项，仅清空其 encrypted_content', async () => {
   await withServers(async (mock, proxy) => {
     const body = {
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-fixture-flash',
       input: [gptReasoningFixture, dsReasoningFixture, userMessageFixture],
     };
     const result = await postJson(proxy.baseUrl, body);
@@ -1377,11 +1330,11 @@ test('混合历史分别发往 GPT、OC DS 与直连 DS 时只清空各自冲突
     const input = [dsReasoningFixture, gptReasoningFixture, userMessageFixture];
     await postJson(
       proxy.baseUrl,
-      { model: 'gpt-5.6-terra', input },
+      { model: 'gpt-fixture-terra', input },
       { authorization: 'Bearer chatgpt-login-token' },
     );
-    await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input });
-    await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash-direct', input });
+    await postJson(proxy.baseUrl, { model: 'deepseek-fixture-flash', input });
+    await postJson(proxy.baseUrl, { model: 'deepseek-fixture-flash-direct', input });
 
     assert.deepEqual(mock.seen[0].body.input, [
       { ...dsReasoningFixture, content: [] },
@@ -1412,7 +1365,7 @@ test('从 Muse 切换到 GPT 时按项目类型规范化 ID', async () => {
     ];
     const result = await postJson(
       proxy.baseUrl,
-      { model: 'gpt-5.6-sol', input },
+      { model: 'gpt-fixture-sol', input },
       { authorization: 'Bearer chatgpt-login-token' },
     );
     assert.equal(result.status, 200);
@@ -1500,8 +1453,8 @@ test('普通请求动态解析 Windows 系统代理，首次解析失败时返�
   };
   await withServers(
     async (mock, proxy) => {
-      const first = await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input: 'first' });
-      const second = await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input: 'second' });
+      const first = await postJson(proxy.baseUrl, { model: 'deepseek-fixture-flash', input: 'first' });
+      const second = await postJson(proxy.baseUrl, { model: 'deepseek-fixture-flash', input: 'second' });
       assert.equal(first.status, 200);
       assert.equal(second.status, 200);
       assert.equal(calls, 2);
@@ -1519,7 +1472,7 @@ test('普通请求动态解析 Windows 系统代理，首次解析失败时返�
 
   await withServers(
     async (mock, proxy) => {
-      const result = await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input: 'hello' });
+      const result = await postJson(proxy.baseUrl, { model: 'deepseek-fixture-flash', input: 'hello' });
       assert.equal(result.status, 502);
       assert.match(JSON.parse(result.text).error.message, /无法确定上游代理/);
       assert.equal(mock.seen.length, 0);
@@ -1544,7 +1497,7 @@ test('畸形与不完整 reasoning 对 GPT 和 DS 均保留并安全清空冲突
     ];
     await postJson(
       proxy.baseUrl,
-      { model: 'gpt-5.6-luna', input: malformed },
+      { model: 'gpt-fixture-luna', input: malformed },
       { authorization: 'Bearer chatgpt-login-token' },
     );
     assert.deepEqual(mock.seen[0].body.input, [
@@ -1556,7 +1509,7 @@ test('畸形与不完整 reasoning 对 GPT 和 DS 均保留并安全清空冲突
       userMessageFixture,
     ]);
 
-    await postJson(proxy.baseUrl, { model: 'deepseek-v4-pro', input: malformed });
+    await postJson(proxy.baseUrl, { model: 'deepseek-fixture-pro', input: malformed });
     assert.deepEqual(mock.seen[1].body.input, [
       { type: 'reasoning' },
       { type: 'reasoning', content: [] },
@@ -1589,10 +1542,10 @@ test('四条 OC/直连 DS 路由完整序列化数组、对象和标量工具输
     { type: 'custom_tool_call_output', call_id: 'call_text', output: 'already-text' },
   ];
   const dsSlugs = [
-    'deepseek-v4-flash',
-    'deepseek-v4-pro',
-    'deepseek-v4-flash-direct',
-    'deepseek-v4-pro-direct',
+    'deepseek-fixture-flash',
+    'deepseek-fixture-pro',
+    'deepseek-fixture-flash-direct',
+    'deepseek-fixture-pro-direct',
   ];
 
   await withServers(async (mock, proxy) => {
@@ -1629,7 +1582,7 @@ test('GPT 路由对工具输出保持原始数组和对象', async () => {
   await withServers(async (mock, proxy) => {
     await postJson(
       proxy.baseUrl,
-      { model: 'gpt-5.6-sol', input },
+      { model: 'gpt-fixture-sol', input },
       { authorization: 'Bearer chatgpt-login-token' },
     );
     assert.deepEqual(mock.seen[0].body.input, input);
@@ -1661,14 +1614,14 @@ test('普通消息、工具调用、搜索与压缩项在历史整理中保持�
     ];
     await postJson(
       proxy.baseUrl,
-      { model: 'gpt-5.6-sol', input: [dsReasoningFixture, ...preserved] },
+      { model: 'gpt-fixture-sol', input: [dsReasoningFixture, ...preserved] },
       { authorization: 'Bearer chatgpt-login-token' },
     );
     assert.deepEqual(mock.seen[0].body.input, [{ ...dsReasoningFixture, content: [] }, ...preserved]);
 
     await postJson(
       proxy.baseUrl,
-      { model: 'deepseek-v4-flash', input: [gptReasoningFixture, ...preserved] },
+      { model: 'deepseek-fixture-flash', input: [gptReasoningFixture, ...preserved] },
     );
     assert.deepEqual(mock.seen[1].body.input, [{ ...gptReasoningFixture, encrypted_content: null }, ...preserved]);
   });
@@ -1676,13 +1629,13 @@ test('普通消息、工具调用、搜索与压缩项在历史整理中保持�
 
 test('字符串 input 与不含 reasoning 的 input 保持原样', async () => {
   await withServers(async (mock, proxy) => {
-    const stringBody = { model: 'deepseek-v4-flash', input: 'hello' };
+    const stringBody = { model: 'deepseek-fixture-flash', input: 'hello' };
     await postJson(proxy.baseUrl, stringBody);
     assert.equal(mock.seen[0].body.input, 'hello');
 
     const plainInput = [{ type: 'input_text', text: 'hello' }];
     const plainBody = {
-      model: 'gpt-5.6-sol',
+      model: 'gpt-fixture-sol',
       input: plainInput,
       tools: [{ type: 'function', name: 'demo' }],
       previous_response_id: 'resp_prev',
@@ -1693,7 +1646,7 @@ test('字符串 input 与不含 reasoning 的 input 保持原样', async () => {
       plainBody,
       { authorization: 'Bearer chatgpt-login-token' },
     );
-    assert.deepEqual(mock.seen[1].body, { ...plainBody, model: 'gpt-5.6-sol' });
+    assert.deepEqual(mock.seen[1].body, { ...plainBody, model: 'gpt-fixture-sol' });
   });
 });
 
@@ -1704,7 +1657,7 @@ test('历史整理日志只记录数量，不泄露推理正文', async () => {
     async (mock, proxy) => {
       await postJson(
         proxy.baseUrl,
-        { model: 'gpt-5.6-sol', input: [dsReasoningFixture, gptReasoningFixture, userMessageFixture] },
+        { model: 'gpt-fixture-sol', input: [dsReasoningFixture, gptReasoningFixture, userMessageFixture] },
         { authorization: 'Bearer chatgpt-login-token' },
       );
       assert.ok(logs.some((message) => message.includes('历史整理：reasoning 1 项兼容字段已整理')));
@@ -1732,7 +1685,7 @@ test('服务端启用历史监控后记录清洗前后结构、结果和 view_im
     await withServers(
       async (mock, proxy) => {
         const result = await postJson(proxy.baseUrl, {
-          model: 'deepseek-v4-flash',
+          model: 'deepseek-fixture-flash',
           input: [
             reasoning,
             { type: 'function_call', id: 'fc_monitor', call_id: 'call_monitor', name: 'view_image', arguments: '{}' },
@@ -1799,7 +1752,7 @@ test('发往 GPT 时移除 DS 风格 web_search_call，保留 ws_ 前缀记录',
     const result = await postJson(
       proxy.baseUrl,
       {
-        model: 'gpt-5.6-sol',
+        model: 'gpt-fixture-sol',
         input: [dsWebSearchFixture, gptWebSearchFixture, userMessageFixture],
       },
       { authorization: 'Bearer chatgpt-login-token' },
@@ -1812,7 +1765,7 @@ test('发往 GPT 时移除 DS 风格 web_search_call，保留 ws_ 前缀记录',
 test('发往 DS 时保留全部 web_search_call', async () => {
   await withServers(async (mock, proxy) => {
     const input = [dsWebSearchFixture, gptWebSearchFixture];
-    const result = await postJson(proxy.baseUrl, { model: 'deepseek-v4-flash', input });
+    const result = await postJson(proxy.baseUrl, { model: 'deepseek-fixture-flash', input });
     assert.equal(result.status, 200);
     assert.deepEqual(mock.seen[0].body.input, input);
   });
@@ -1825,7 +1778,7 @@ test('历史整理日志记录 web_search_call 数量，不泄露搜索 ID', asy
     async (mock, proxy) => {
       await postJson(
         proxy.baseUrl,
-        { model: 'gpt-5.6-sol', input: [dsWebSearchFixture, userMessageFixture] },
+        { model: 'gpt-fixture-sol', input: [dsWebSearchFixture, userMessageFixture] },
         { authorization: 'Bearer chatgpt-login-token' },
       );
       assert.ok(logs.some((message) => message.includes('web_search_call 1 项')));

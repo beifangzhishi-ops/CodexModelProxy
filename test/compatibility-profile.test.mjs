@@ -45,16 +45,16 @@ test('profile override 按精确模型、Provider pattern、全局 pattern 的�
 
 test('openai-auto 能按动态模型名分类', () => {
   const provider = { id: 'cpa', compat_profile: 'openai-auto' };
-  assert.equal(resolveCompatibilityProfile({ provider, model: 'gpt-5.6-sol' }), 'openai');
+  assert.equal(resolveCompatibilityProfile({ provider, model: 'gpt-fixture-sol' }), 'openai');
   assert.equal(resolveCompatibilityProfile({ provider, model: 'codex-new-model' }), 'openai');
-  assert.equal(resolveCompatibilityProfile({ provider, model: 'deepseek-v4-flash' }), 'deepseek');
+  assert.equal(resolveCompatibilityProfile({ provider, model: 'deepseek-fixture-flash' }), 'deepseek');
   assert.equal(resolveCompatibilityProfile({ provider, model: 'claude-sonnet' }), 'passthrough');
 });
 
 test('简单星号 wildcard 不会误匹配其他模型', () => {
   assert.equal(matchWildcard('muse-*', 'muse-spark'), true);
   assert.equal(matchWildcard('muse-*', 'deepseek-muse'), false);
-  assert.equal(matchWildcard('gpt-*', 'gpt-5.6'), true);
+  assert.equal(matchWildcard('gpt-*', 'gpt-fixture'), true);
   assert.equal(matchWildcard('gpt-*', 'gptx-5.6'), false);
 });
 

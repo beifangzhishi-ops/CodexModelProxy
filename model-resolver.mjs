@@ -1,4 +1,4 @@
-// 统一解析 provider/model、alias、旧模型名和旧 direct/ 请求。
+// Resolve Provider model names and Responses routes.
 
 import {
   applyCompatibilityProfile,
@@ -31,9 +31,6 @@ export function resolveModelSelection(model, registry) {
   const canonicalReference = parseModelReference(aliasTarget.target || reference.raw);
 
   if (canonicalReference.kind === 'canonical') {
-    if (canonicalReference.namespace === 'direct') {
-      return resolveLegacyDirectReference(reference.raw, canonicalReference.model, registry);
-    }
     const provider = registry.getProviderByNamespace(canonicalReference.namespace);
     if (!provider) return invalidModel(model, `未知 Provider 命名空间：${canonicalReference.namespace}`);
     if (!provider.enabled) {
@@ -67,7 +64,6 @@ export function resolveModelSelection(model, registry) {
       publicModel: reference.raw,
       registry,
     });
-    if (reference.raw.startsWith('direct/')) route = { ...route, network: 'direct' };
     return {
       ok: true,
       provider: provider.id,
@@ -95,36 +91,6 @@ export function resolveModelSelection(model, registry) {
     };
   }
   return invalidModel(model);
-}
-
-function resolveLegacyDirectReference(publicModel, modelName, registry) {
-  const candidates = [...(registry.staticModels?.values() || [])]
-    .filter(({ provider, modelName: configuredName, spec }) => provider.enabled && (
-      configuredName === modelName || spec.upstream_model === modelName
-    ));
-  const selected = candidates.find(({ provider }) => provider.network === 'direct') || candidates[0];
-  const dynamicProvider = selected?.provider || registry.listProviders().find(
-    (provider) => provider.enabled && provider.network === 'direct' && provider.discover_models,
-  );
-  if (!dynamicProvider) return invalidModel(publicModel);
-  const resolvedModelName = selected?.modelName || modelName;
-  const canonical = `${dynamicProvider.model_prefix}${resolvedModelName}`;
-  const route = buildProviderRoute({
-    provider: dynamicProvider,
-    modelName: resolvedModelName,
-    modelSpec: selected?.spec || {},
-    canonical,
-    publicModel,
-    registry,
-  });
-  return {
-    ok: true,
-    provider: dynamicProvider.id,
-    provider_id: dynamicProvider.id,
-    routeSlug: publicModel,
-    canonicalModel: canonical,
-    route: { ...route, network: 'direct' },
-  };
 }
 
 function resolveProviderModelOverride(provider, modelName) {

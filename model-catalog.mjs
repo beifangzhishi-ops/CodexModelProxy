@@ -4,8 +4,8 @@
 import { buildCatalogModel } from './model-metadata.mjs';
 import { resolveModelSelection } from './model-resolver.mjs';
 
-export async function sendModelList(res, registry, sendJson) {
-  const dynamicModels = await registry.discoverAll();
+export async function sendModelList(res, registry, sendJson, context = {}) {
+  const dynamicModels = await registry.discoverAll(context);
   const publicSlugs = visiblePublicSlugs(registry);
   const publicCatalog = publicSlugs.map((slug, index) => {
     const selection = resolveModelSelection(slug, registry);
@@ -31,14 +31,13 @@ export async function sendModelList(res, registry, sendJson) {
       source: mergeCatalogSources(legacyTemplate, model),
       staticSpec,
       priority: publicCatalog.length + index + 1,
-      displayName: `${providerLabel} · ${upstreamModel}`,
+      displayName: `${providerLabel} · ${model.name || model.display_name || upstreamModel}`,
     });
   });
 
   const dynamicIds = new Set(dynamicModels.map((model) => model.id));
   const canonicalIds = registry.config.expose_canonical_models === true
     ? registry.knownCanonicalModels()
-      .filter((slug) => !slug.startsWith('direct/'))
       .filter((slug) => !dynamicIds.has(slug))
       .filter((slug) => !publicSlugs.includes(slug))
     : [];
@@ -91,8 +90,6 @@ export function visiblePublicSlugs(registry) {
   const seen = new Set();
   const visible = [];
   for (const slug of candidates) {
-    // direct/* 仅作为旧请求兼容入口，不能出现在 Codex 模型目录。
-    if (slug.startsWith('direct/')) continue;
     if (seen.has(slug)) continue;
     seen.add(slug);
     const selection = resolveModelSelection(slug, registry);

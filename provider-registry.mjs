@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createModelDiscovery } from './model-discovery.mjs';
+import { createModelDiscovery, createPassthroughModelDiscovery } from './model-discovery.mjs';
 import {
   isValidCompatibilityProfile,
   validateCompatibilityOverrides,
@@ -17,12 +17,12 @@ export const DEFAULT_PROVIDERS_FILE = path.join(__dirname, 'providers.local.json
 export const DEFAULT_LOCAL_ENV_FILE = path.join(__dirname, 'proxy-local.env');
 export const SUPPORTED_AUTH_MODES = new Set(['api_key', 'openai_passthrough', 'none']);
 export const SUPPORTED_PROTOCOLS = new Set(['responses']);
-export const RESERVED_PROVIDER_NAMESPACES = new Set(['direct']);
 
 const LEGACY_PROVIDER_KEY_ENV = Object.freeze({
   cpa: 'CPA_API_KEY',
   opencode: 'OPENCODE_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
+  kimi: 'MOONSHOT_API_KEY',
   zai: 'ZAI_API_KEY',
 });
 
@@ -284,13 +284,6 @@ export function createProviderRegistry({
         `Provider ${providerId} 的 model_prefix 与 Provider ${namespaces.get(provider.namespace)} 冲突：${provider.model_prefix}`,
       );
     }
-    if (providerId === 'direct') {
-      throw new Error('Provider id direct 是保留名称，不能作为新 Provider');
-    }
-    if (RESERVED_PROVIDER_NAMESPACES.has(provider.namespace)) {
-      // direct 是旧请求前缀，不允许新 Provider 占用；cpa 在迁移期明确保留。
-      throw new Error(`Provider ${providerId} 的 model_prefix 使用保留命名空间：${provider.namespace}/`);
-    }
     providers.set(providerId, provider);
     namespaces.set(provider.namespace, providerId);
   }
@@ -342,20 +335,14 @@ export function createProviderRegistry({
     for (const legacySlug of route.legacy_slugs || []) {
       if (!aliases.has(legacySlug)) aliases.set(legacySlug, canonical);
     }
-    const directSlug = `direct/${slug}`;
-    const directRouteSlug = config.models[`${slug}-direct`] ? `${slug}-direct` : slug;
-    const directProviderId = legacy.routeProviders.get(directRouteSlug) || providerId;
-    const directProvider = providers.get(directProviderId) || provider;
-    const directRoute = config.models[directRouteSlug] || route;
-    const directCanonical = `${directProvider.model_prefix}${String(directRoute.upstream_model || directRouteSlug).trim()}`;
-    if (!aliases.has(directSlug)) aliases.set(directSlug, directCanonical);
+
   }
   validateAliasGraph(aliases, providers, configuredStaticModels);
 
   const discoveries = new Map();
   for (const provider of providers.values()) {
     if (!provider.enabled || !provider.discover_models) continue;
-    discoveries.set(provider.id, discoveryFactory({
+    discoveries.set(provider.id, (provider.auth_mode === 'openai_passthrough' ? createPassthroughModelDiscovery : discoveryFactory)({
       provider,
       logger,
       resolveProxy: () => resolveProxy(provider.id, provider.network),
@@ -410,11 +397,11 @@ export function createProviderRegistry({
     knownCanonicalModels() {
       return [...staticModels.keys()];
     },
-    async discoverAll() {
+    async discoverAll(context = {}) {
       const lists = await Promise.all(
         [...discoveries.entries()].map(async ([providerId, discovery]) => ({
           providerId,
-          models: await discovery.getModels(),
+          models: await discovery.getModels(context),
         })),
       );
       return lists

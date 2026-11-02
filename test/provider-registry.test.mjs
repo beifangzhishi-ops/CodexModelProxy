@@ -257,10 +257,6 @@ test('Provider protocol、profile、namespace 和保留 id 校验', () => {
     } } }),
     /model_prefix.*冲突/,
   );
-  assert.throws(
-    () => createProviderRegistry({ config: { providers: { direct: validProvider({ model_prefix: 'direct/' }) } } }),
-    /Provider id direct 是保留名称/,
-  );
 });
 
 test('别名目标、别名循环和动态 Provider 校验', () => {

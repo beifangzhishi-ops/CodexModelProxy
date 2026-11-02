@@ -70,6 +70,26 @@ export function createModelDiscovery({
   };
 }
 
+// ChatGPT catalog discovery always uses the current request and has no CMP-side cache.
+export function createPassthroughModelDiscovery(options = {}) {
+  return {
+    async getModels(context = {}) {
+      if (!context.authorization) return [];
+      try {
+        const proxy = await options.resolveProxy(options.provider);
+        const payload = await (options.fetchModels || requestProviderModels)(
+          options.provider, proxy, context,
+        );
+        return normalizeDiscoveredModels(payload, options.provider);
+      } catch {
+        options.logger?.warn?.('ChatGPT model discovery failed');
+        return [];
+      }
+    },
+    getState: () => ({ cachedCount: 0, refreshing: false }),
+  };
+}
+
 export function normalizeDiscoveredModels(payload, provider) {
   const rawModels = extractModelArray(payload);
   if (!Array.isArray(rawModels)) {
@@ -86,11 +106,23 @@ export function normalizeDiscoveredModels(payload, provider) {
         : null;
     const rawId = String(source?.id || source?.slug || '').trim();
     if (!rawId) continue;
+    if (source.visibility && source.visibility !== 'list') continue;
+    if (source.api_capabilities?.responses?.supported === false) continue;
     const upstreamModel = rawId.startsWith(prefix) ? rawId.slice(prefix.length) : rawId;
     if (!upstreamModel || seen.has(upstreamModel)) continue;
     seen.add(upstreamModel);
+    const effort = source.effort;
+    const reasoning = effort && Array.isArray(effort.supported_levels)
+      ? {
+          supported_reasoning_levels: effort.supported_levels.map((level) => ({
+            effort: level, description: String(level),
+          })),
+          ...(effort.default_level ? { default_reasoning_level: effort.default_level } : {}),
+        }
+      : {};
     normalized.push({
       ...source,
+      ...reasoning,
       id: `${prefix}${upstreamModel}`,
       upstream_model: upstreamModel,
       provider_id: provider.id,
@@ -110,7 +142,7 @@ export function extractModelArray(payload) {
   return null;
 }
 
-export function requestProviderModels(provider, proxy = { url: '', mode: 'direct' }) {
+export function requestProviderModels(provider, proxy = { url: '', mode: 'direct' }, context = {}) {
   let endpoint;
   try {
     endpoint = new URL(`${String(provider.base_url).replace(/\/+$/, '')}/models`);
@@ -121,12 +153,19 @@ export function requestProviderModels(provider, proxy = { url: '', mode: 'direct
     return Promise.reject(new Error(`Provider ${provider.id} 不支持的 URL 协议：${endpoint.protocol}`));
   }
 
+  if (provider.auth_mode === 'openai_passthrough' && context.clientVersion) {
+    endpoint.searchParams.set('client_version', context.clientVersion);
+  }
   const headers = {
     accept: 'application/json',
     'user-agent': 'codexmodelproxy/1.0',
   };
   if (provider.auth_mode === 'api_key' && provider.api_key) {
     headers.authorization = `Bearer ${provider.api_key}`;
+  }
+  if (provider.auth_mode === 'openai_passthrough' && context.authorization) {
+    headers.authorization = context.authorization;
+    if (context.accountId) headers['chatgpt-account-id'] = context.accountId;
   }
   const lib = endpoint.protocol === 'https:' ? https : http;
   const agent = endpoint.protocol === 'https:' && proxy?.url
