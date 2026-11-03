@@ -54,6 +54,16 @@ CMP 在项目根目录生成唯一的可编辑文件 `models.txt`（已忽略 Gi
 
 安装后桌面提供 **Codex-官方直连**、**Codex-CMP模式** 两个快捷方式，以及用记事本打开这份 `models.txt` 的 **CMP-模型精选** 快捷方式；快捷方式只负责打开文件/脚本，不另外生成模型配置。
 
+### `.codex` 安全清理
+
+`codex-switch/cleanup_codex.py` 是两台 Windows 电脑通用的手动清理程序，**默认只预览**；只有明确添加 `--apply` 才会删除文件，而且实际删除只允许当前用户的 `.codex`。
+
+清理白名单：30 天以上的 `.tmp/plugins` 旧下载副本、`plugins-clone-*`、`bundled-marketplaces/*.staging-*` 旧安装暂存、旧 `.sandbox` 日志、弃用的静态模型目录文件，7 天以上的落单 `..codex-global-state.json.tmp-*`；另外清理旧版 CMD 配置归档、超量的配置快照（**保留最近两份**）。
+
+**不会清理**现有 `config.toml`、官方/CMP 双模式文件、`auth.json`、`models_cache.json`、`.codex-global-state.json` 及其常规备份、`sessions/`、`archived_sessions/`、SQLite 及 WAL、`plugins/`、`skills/`、`packages/`、`cache/`、`generated_images/`。有运行中插件和市场缓存的目录不会整目录删除。
+
+清理程序只能清理显式白名单中的路径，并检查软链接/目录归属；不能用它清理其他系统目录。运行前请先审查预览结果。该程序不会结束 Codex、CMP 或相关插件进程。
+
 切换 Provider 或首次启用远端模型目录后，Codex App Server 可能需要完全重启，模型目录也会缓存一段时间。**维护代理时不得由 Agent 自行重启运行中的 CMP**；否则可能中断当前任务。
 
 ## 兼容策略与限制
