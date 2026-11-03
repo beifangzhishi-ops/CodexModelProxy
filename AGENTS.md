@@ -22,4 +22,4 @@
 - `models.txt` 是每台电脑本地的唯一精选目录，可人工编辑，不得提交 Git、不得在升级时覆盖其星标；下拉框隐藏不影响完整 ID 路由。
 - 官方直连 CMD 必须完全独立于 CMP 服务和目录，不能加入请求 CMP 的预检逻辑；切换脚本不得主动重启 CMP 或 Codex。
 - 只维护 `codex-switch/` 下的一套切换程序，两台电脑生成相同的官方/CMP 双配置，归档多余旧模板后不可恢复旧活动入口。
-- `.codex` 清理必须先运行 `codex-switch/cleanup_codex.py` 预览，只允许白名单、30 天以上的安装暂存与日志、7 天以上的遗留状态临时文件；保留最近两份配置备份。不得删除认证、会话、数据库、插件、活动缓存和当前配置。
+- Keep the .codex top-level tidy with codex-switch/tidy_root.py after preview. Archive old root-level configurations and model lists, delete only orphaned state-temp files older than 7 days, never prune current caches, sessions, authentication, or databases.

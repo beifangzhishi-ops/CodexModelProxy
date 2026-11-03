@@ -5,15 +5,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-
-test('Codex cleanup only selects safe, stale artifacts and keeps active user data', (t) => {
-  const result = spawnSync('python', ['codex-switch/test_cleanup.py'], {
+test('Codex root cleanup only selects known stale files', (t) => {
+  const result = spawnSync('python', ['codex-switch/test_tidy_root.py'], {
     cwd: root,
     encoding: 'utf8',
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
   });
   if (['ENOENT', 'EPERM', 'EACCES', 'EAGAIN'].includes(result.error?.code)) {
-    t.skip('Python subprocess is unavailable inside this test worker');
+    t.skip('Python subprocess unavailable within this test worker');
     return;
   }
   assert.equal(result.error, undefined, String(result.error));
