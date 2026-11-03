@@ -350,6 +350,45 @@ function keyPriorityConfig(baseUrl) {
   };
 }
 
+test('bare GPT passthrough forwards unchanged model and ChatGPT credentials without a selected star', async () => {
+  await withCustomServers((baseUrl) => ({
+    providers: {
+      chatgpt: {
+        enabled: true,
+        base_url: baseUrl,
+        auth_mode: 'openai_passthrough',
+        protocol: 'responses',
+        model_prefix: 'chatgpt/',
+        discover_models: true,
+        compat_profile: 'openai',
+        metadata_profile: 'openai',
+        models: { 'gpt-fixture-sol': {} },
+      },
+    },
+  }), {}, async (mock, proxy) => {
+    const catalog = await (await fetch(`${proxy.baseUrl}/v1/models`)).json();
+    assert.deepEqual(catalog.data.map((model) => model.id), ['gpt-fixture-sol']);
+    assert.deepEqual(catalog.models.map((model) => model.slug), ['gpt-fixture-sol']);
+    const headers = {
+      authorization: 'Bearer caller-chatgpt-token',
+      'chatgpt-account-id': 'caller-account',
+    };
+    const response = await postJson(proxy.baseUrl, { model: 'gpt-fixture-sol', input: 'hello' }, headers);
+    assert.equal(response.status, 200);
+    assert.equal(JSON.parse(response.text).model, 'gpt-fixture-sol');
+    assert.equal(mock.seen.at(-1).url, '/responses');
+    assert.equal(mock.seen.at(-1).body.model, 'gpt-fixture-sol');
+    assert.equal(mock.seen.at(-1).auth, headers.authorization);
+    assert.equal(mock.seen.at(-1).accountId, headers['chatgpt-account-id']);
+
+    const compact = await postCompact(proxy.baseUrl, { model: 'gpt-fixture-sol', input: 'hello' }, headers);
+    assert.equal(compact.status, 200);
+    assert.equal(mock.seen.at(-1).url, '/responses/compact');
+    assert.equal(mock.seen.at(-1).body.model, 'gpt-fixture-sol');
+    assert.equal(mock.seen.at(-1).auth, headers.authorization);
+  });
+});
+
 test('健康检查与模型列表只展示真实静态通道，GLM-5.3 能力保持不变', async () => {
   await withServers(async (mock, proxy) => {
     const health = await fetch(`${proxy.baseUrl}/healthz`);
@@ -1225,17 +1264,22 @@ test('上游错误状态、响应头和正文保持不变', async () => {
   });
 });
 
-test('production config discovers models rather than pinning model versions', () => {
+test('production config pins GPT passthrough models separately and discovers third-party models', () => {
   const config = loadConfig();
   assert.equal(config.expose_canonical_models, false);
   assert.deepEqual(Object.keys(config.models), []);
   assert.deepEqual(Object.keys(config.aliases), []);
-  for (const name of ['chatgpt', 'deepseek', 'opencode', 'zai', 'kimi']) {
+  assert.deepEqual(Object.keys(config.providers.chatgpt.models), [
+    'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-sol',
+    'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+  ]);
+  for (const name of ['deepseek', 'opencode', 'zai', 'kimi']) {
     assert.equal(config.providers[name].discover_models, true);
     assert.deepEqual(config.providers[name].models, {});
   }
   assert.equal(config.providers.kimi.enabled, false);
   assert.equal(config.providers.chatgpt.auth_mode, 'openai_passthrough');
+  assert.equal(config.providers.chatgpt.discover_models, true);
 });
 
 test('密钥文件缺失时返回空对象', () => {

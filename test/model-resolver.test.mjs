@@ -3,6 +3,55 @@ import assert from 'node:assert/strict';
 import { createProviderRegistry } from '../provider-registry.mjs';
 import { resolveModelSelection } from '../model-resolver.mjs';
 
+test('bare GPT models route through the live ChatGPT passthrough provider, not the favorites list', () => {
+  const r = createProviderRegistry({
+    config: { providers: {
+      chatgpt: {
+        enabled: true, base_url: 'https://chatgpt.example/codex',
+        auth_mode: 'openai_passthrough', protocol: 'responses',
+        discover_models: true, model_prefix: 'chatgpt/', compat_profile: 'openai',
+        models: { 'gpt-6.1-sol': {} },
+      },
+    } },
+  });
+  for (const slug of ['gpt-6.1-sol', 'gpt-new-sol']) {
+    const selected = resolveModelSelection(slug, r);
+    assert.equal(selected.ok, true);
+    assert.equal(selected.routeSlug, slug);
+    assert.equal(selected.route.upstream_model, slug);
+    assert.equal(selected.route.public_model, slug);
+    assert.equal(selected.route.auth_mode, 'openai_passthrough');
+    assert.equal(selected.route.strip_client_credentials, false);
+  }
+  assert.equal(resolveModelSelection('claude-unknown', r).status, 400);
+  assert.equal(resolveModelSelection('missing/model', r).status, 400);
+});
+
+test('official GPT passthrough has priority over a conflicting third-party alias', () => {
+  const r = createProviderRegistry({
+    config: {
+      providers: {
+        chatgpt: {
+          enabled: true, base_url: 'https://chatgpt.example/codex',
+          auth_mode: 'openai_passthrough', protocol: 'responses',
+          discover_models: true, model_prefix: 'chatgpt/', compat_profile: 'openai',
+        },
+        other: {
+          enabled: true, base_url: 'https://other.example/v1',
+          api_key: 'test-key', auth_mode: 'api_key', protocol: 'responses',
+          discover_models: true, model_prefix: 'other/', compat_profile: 'passthrough',
+        },
+      },
+      aliases: { 'gpt-current-sol': 'other/not-gpt' },
+    },
+  });
+  const selection = resolveModelSelection('gpt-current-sol', r);
+  assert.equal(selection.ok, true);
+  assert.equal(selection.provider_id, 'chatgpt');
+  assert.equal(selection.route.upstream_model, 'gpt-current-sol');
+  assert.equal(selection.route.auth_mode, 'openai_passthrough');
+});
+
 function registry() {
   return createProviderRegistry({
     config: {

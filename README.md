@@ -8,18 +8,18 @@ CMP 仅转发 Responses 请求、整理已知的历史字段格式，不提供 C
 
 | Provider | 命名空间 | 上游地址 | 认证 | 模型目录 |
 | --- | --- | --- | --- | --- |
-| ChatGPT | `chatgpt/` | `https://chatgpt.com/backend-api/codex` | 透传当前 Codex 登录凭据 | 每次目录请求实时读取，无 CMP 缓存 |
+| ChatGPT | `gpt-*`（透传原始模型 ID） | `https://chatgpt.com/backend-api/codex` | 透传当前 Codex 登录凭据 | 固定可选项始终保留；带凭据时实时补充官方目录，不缓存登录态 |
 | DeepSeek | `ds/` | `https://api.deepseek.com` | `DEEPSEEK_API_KEY` | 上游 `/models`、60 秒缓存 |
 | Kimi | `kimi/` | `https://api.moonshot.cn/v1` | `MOONSHOT_API_KEY` | 上游 `/models`、60 秒缓存；默认关闭 |
 | OpenCode | `oc/` | `https://opencode.ai/zen/go/v1` | `OPENCODE_API_KEY` | 上游 `/models`、60 秒缓存 |
 | Z.AI | `zai/` | `https://api.z.ai/api/v1` | `ZAI_API_KEY` | 上游 `/models`、60 秒缓存 |
 | CPA | `cpa/` | 本机 `providers.local.json` 指定 | 独立 API Key | 上游 `/models`、60 秒缓存 |
 
-* 无须维护固定的模型版本表。上游若返回 `display_name`、`context_window`、`input_modalities`、推理档位等信息，CMP 尽量保留并映射到 Codex 模型元数据；未提供的字段按 Codex 必需的最低格式补全，不暗示真实能力已验证。
+* ChatGPT 透传模型由 `proxy-config.json` 中 `providers.chatgpt.models` 的固定可选项保底（当前八个 GPT 型号）；第三方模型不固定版本号。上游的 `display_name`、`context_window` 等元数据按原样映射，缺失字段仅为 Codex 目录格式补全，不代表真实能力已经验证。
 * 第三方目录成功结果在内存中保留 60 秒；失败时沿用最近成功结果，30 秒内不重复尝试。Codex App Server 自己另有模型目录缓存，刷新到模型选择器存在延迟。
-* GPT 目录查询携带当前请求的 ChatGPT OAuth Bearer、账号标识（如有）及 `client_version`，不会缓存登录态，也不会把 ChatGPT 凭据传给第三方。
+* GPT 固定项在目录请求没有登录信息时仍保留；当请求携带 ChatGPT OAuth Bearer、账号标识（如有）和 `client_version` 时，还会实时补充官方模型和元数据，不缓存登录态，也不会把凭据传给第三方。裸 `gpt-*` 请求的模型 ID 和登录凭据会透传至 ChatGPT 官方后端。
 * Kimi 使用开放平台 **按量 API**，不是 Kimi Code 会员接口；未配置密钥时不展示 Kimi 模型，也不阻止 CMP 其他路由启动。
-* 每种 Provider 使用自己的真实 API 模型 ID，选择模型时在 Codex 显示 `provider/model`；旧版本号、旧代理别名不再是配置目录的一部分。
+* 第三方 Provider 使用真实 API 模型 ID，在 Codex 显示 `provider/model`；ChatGPT 透传模型沿用原始 `gpt-*` ID，不添加命名空间前缀。精选列表不能限制 GPT 请求路由。
 
 ## 配置与启动
 
@@ -37,19 +37,19 @@ Codex 只保留两种配置：**官方直连**和 **CMP**。安装脚本 `codex-
 
 ### 精选模型文件
 
-CMP 在项目根目录生成唯一的可编辑文件 `models.txt`（已忽略 Git，不随代码更新覆盖）。首次请求 `GET /v1/models` 并发现模型后生成文件，之后每次获取目录都会补充上游新增的模型 ID；对已经存在的行不做重写，不删除你写的注释和星标。
+CMP 在项目根目录生成每台机器唯一的第三方模型精选文件 `models.txt`（已忽略 Git，更新代码不会覆盖）。首次请求 `GET /v1/models` 并发现第三方模型后生成文件，后续发现的新第三方模型自动追加为未选中；已有行、注释和星标都原样保留。GPT 透传模型始终单独列出，不进入精选文件。
 
 ```text
-# 在完整模型 ID 前加 *，显示在 Codex 下拉列表
+# 仅第三方模型：在完整模型 ID 前加 *，显示在 Codex 下拉列表
 * ds/deepseek-flash
 * kimi/kimi-k2.7-code
   kimi/kimi-k2.7-code-highspeed
 ```
 
-- 在行首添加 `* ` 表示显示，去掉表示隐藏；文件中的名称可以直接选中复制，不必重新输入模型 ID。
-- CMP 仍然自动发现全部模型并允许按完整 ID 调用，**不在下拉框显示≠禁止请求**。只有实时发现成功的模型才会在下拉框显示。
+- 第三方模型行首加 `* ` 表示显示，去掉表示隐藏。GPT 透传模型不受星标控制，始终作为独立的可选模型显示。
+- CMP 自动发现第三方模型并允许按完整 ID 路由；**从下拉框隐藏不等于禁止请求**。第三方模型需要实时发现成功才会加入精选候选；GPT 固定项无需依赖目录发现，账号权限仍由官方后端决定。
 - 默认只精选一个普通 DeepSeek Flash 和一个普通 Kimi Coding 模型，不会自动选中高速计费版本。后续新增的模型自动追加为未选中。
-- 你手工编辑的行不会被刷新覆盖；如果当前所有精选模型都暂时不可用，为避免模型菜单空白，临时展示一个已发现的模型，原星标不变。
+- 手工编辑的精选行不会被刷新覆盖；如果当前全部第三方精选暂时不可用，会临时展示一个已发现的第三方模型，原星标不变。GPT 固定透传项不受此回退逻辑影响。
 - 修改 `models.txt` 后，Codex 可能需要重新加载模型列表或重新打开桌面端。CMP 目录无须重启，新请求就会重新读取文件。
 
 安装后桌面提供 **Codex-官方直连**、**Codex-CMP模式** 两个快捷方式，以及用记事本打开这份 `models.txt` 的 **CMP-模型精选** 快捷方式；快捷方式只负责打开文件/脚本，不另外生成模型配置。

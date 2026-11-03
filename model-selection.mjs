@@ -1,5 +1,6 @@
 // Human-editable catalog visibility. The full discovered catalog remains routable.
-// Only the starred entries are advertised in the Codex model picker.
+// Stars apply only to third-party models. ChatGPT passthrough models always
+// appear separately, independently of this file.
 import fs from 'node:fs';
 import path from 'node:path';
 

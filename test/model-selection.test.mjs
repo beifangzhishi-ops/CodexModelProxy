@@ -85,3 +85,53 @@ test('discovery and model picker share a selection, hidden models stay routable'
     assert.equal(resolveModelSelection('ds/hidden', registry).ok, true);
   });
 });
+
+test('ChatGPT passthrough stays selectable without stars or login; only third-party models use favorites', async () => {
+  await withSelectionFile(async (file) => {
+    fs.writeFileSync(file, '* ds/selected\n  ds/hidden\n');
+    const registry = createProviderRegistry({
+      config: { providers: {
+        chatgpt: {
+          enabled: true, base_url: 'https://chatgpt.example/codex',
+          auth_mode: 'openai_passthrough', protocol: 'responses',
+          discover_models: true, model_prefix: 'chatgpt/',
+          compat_profile: 'openai', metadata_profile: 'openai',
+          models: { 'gpt-6.1-sol': {}, 'gpt-6-astra': {} },
+        },
+        ds: {
+          enabled: true, base_url: 'https://deepseek.example/v1',
+          api_key: 'test-key', auth_mode: 'api_key', protocol: 'responses',
+          discover_models: true, model_prefix: 'ds/',
+          compat_profile: 'deepseek',
+        },
+      } },
+      localConfig: { providers: {} }, logger,
+      discoveryFetchModels: async (provider) => provider.id === 'chatgpt'
+        ? { models: [{ slug: 'gpt-6.1-sol', display_name: 'GPT 6.1 Sol' }, { slug: 'gpt-new-sol' }] }
+        : { data: [{ id: 'selected' }, { id: 'hidden' }] },
+    });
+    const response = async (context) => {
+      let payload;
+      await sendModelList({}, registry, (_, status, body) => {
+        assert.equal(status, 200);
+        payload = body;
+      }, context, file);
+      assert.deepEqual(payload.models.map((model) => model.slug), payload.data.map((model) => model.id));
+      return payload;
+    };
+    const withoutAuth = await response({});
+    assert.deepEqual(withoutAuth.data.map((model) => model.id), [
+      'gpt-6.1-sol', 'gpt-6-astra', 'ds/selected',
+    ]);
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /chatgpt\/|gpt-6/);
+    assert.equal(resolveModelSelection('gpt-6.1-sol', registry).route.auth_mode, 'openai_passthrough');
+    assert.equal(resolveModelSelection('ds/hidden', registry).ok, true);
+
+    const withAuth = await response({ authorization: 'Bearer test-user-token' });
+    assert.deepEqual(withAuth.data.map((model) => model.id), [
+      'gpt-6.1-sol', 'gpt-6-astra', 'gpt-new-sol', 'ds/selected',
+    ]);
+    assert.equal(withAuth.models[0].display_name, 'GPT 6.1 Sol');
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /chatgpt\/|gpt-new/);
+  });
+});

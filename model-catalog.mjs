@@ -7,7 +7,45 @@ import { syncModelSelection } from './model-selection.mjs';
 
 export async function sendModelList(res, registry, sendJson, context = {}, selectionFile = '') {
   const dynamicModels = await registry.discoverAll(context);
-  const publicSlugs = visiblePublicSlugs(registry);
+  const passthrough = registry.getProvider('chatgpt');
+  const hasPassthrough = passthrough?.enabled === true && passthrough.auth_mode === 'openai_passthrough';
+  const fixedPassthrough = new Map();
+  if (hasPassthrough) {
+    for (const [canonical, entry] of registry.configuredStaticModels) {
+      if (entry.provider.id !== passthrough.id || entry.spec.enabled === false || !entry.modelName.startsWith('gpt-')) continue;
+      fixedPassthrough.set(entry.modelName, null);
+    }
+    // Live ChatGPT metadata may enrich the fixed entries, but never removes
+    // them when a catalog request has no login credentials.
+    for (const model of dynamicModels) {
+      if (model.provider_id !== passthrough.id || !model.upstream_model?.startsWith('gpt-')) continue;
+      fixedPassthrough.set(model.upstream_model, model);
+    }
+  }
+  const passthroughData = [...fixedPassthrough].map(([modelName, live]) => ({
+    ...(live || {}),
+    id: modelName,
+    object: 'model',
+    owned_by: 'chatgpt',
+  }));
+  const passthroughCatalog = [...fixedPassthrough].map(([modelName, live], index) => {
+    const spec = registry.getConfiguredStaticModel(`${passthrough.model_prefix}${modelName}`)?.spec || {};
+    const source = mergeCatalogSources(findLegacyCatalogTemplate(registry.config, modelName, modelName), live);
+    return buildCatalogModel({
+      id: modelName,
+      modelName,
+      provider: passthrough,
+      source,
+      staticSpec: spec,
+      priority: index + 1,
+      displayName: live?.display_name || spec.display_name || source.display_name || modelName,
+    });
+  });
+  const thirdPartyDynamic = dynamicModels.filter((model) => model.provider_id !== passthrough?.id || !hasPassthrough);
+  // Public ChatGPT IDs are already emitted as unprefixed passthrough entries.
+  // Do not list the same model a second time through a configured public alias.
+  const publicSlugs = visiblePublicSlugs(registry).filter((slug) =>
+    !hasPassthrough || resolveModelSelection(slug, registry).provider_id !== passthrough.id);
   const publicCatalog = publicSlugs.map((slug, index) => {
     const selection = resolveModelSelection(slug, registry);
     return buildCatalogForSelection(slug, selection, registry, index + 1);
@@ -18,7 +56,7 @@ export async function sendModelList(res, registry, sendJson, context = {}, selec
     owned_by: 'unified',
   }));
 
-  const dynamicCatalog = dynamicModels.map((model, index) => {
+  const dynamicCatalog = thirdPartyDynamic.map((model, index) => {
     const provider = registry.getProvider(model.provider_id);
     if (!provider) throw new Error(`动态模型 ${model.id} 指向未知 Provider ${model.provider_id}`);
     const staticSpec = registry.getConfiguredStaticModel(model.id)?.spec || {};
@@ -36,11 +74,12 @@ export async function sendModelList(res, registry, sendJson, context = {}, selec
     });
   });
 
-  const dynamicIds = new Set(dynamicModels.map((model) => model.id));
+  const dynamicIds = new Set(thirdPartyDynamic.map((model) => model.id));
   const canonicalIds = registry.config.expose_canonical_models === true
     ? registry.knownCanonicalModels()
       .filter((slug) => !dynamicIds.has(slug))
       .filter((slug) => !publicSlugs.includes(slug))
+      .filter((slug) => !hasPassthrough || !slug.startsWith(passthrough.model_prefix))
     : [];
   const canonicalCatalog = canonicalIds.map((slug, index) => {
     const selection = resolveModelSelection(slug, registry);
@@ -59,7 +98,7 @@ export async function sendModelList(res, registry, sendJson, context = {}, selec
   }));
 
   const allModels = [...publicCatalog, ...canonicalCatalog, ...dynamicCatalog];
-  const allData = [...staticData, ...canonicalData, ...dynamicModels];
+  const allData = [...staticData, ...canonicalData, ...thirdPartyDynamic];
   let selected = null;
   if (selectionFile) {
     try {
@@ -71,8 +110,8 @@ export async function sendModelList(res, registry, sendJson, context = {}, selec
   }
   sendJson(res, 200, {
     object: 'list',
-    models: selected ? allModels.filter((model) => selected.has(model.slug)) : allModels,
-    data: selected ? allData.filter((model) => selected.has(model.id)) : allData,
+    models: [...passthroughCatalog, ...(selected ? allModels.filter((model) => selected.has(model.slug)) : allModels)],
+    data: [...passthroughData, ...(selected ? allData.filter((model) => selected.has(model.id)) : allData)],
   });
 }
 
