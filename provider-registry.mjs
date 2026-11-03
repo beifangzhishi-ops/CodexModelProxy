@@ -397,6 +397,9 @@ export function createProviderRegistry({
     knownCanonicalModels() {
       return [...staticModels.keys()];
     },
+    isCatalogProviderAvailable(providerId) {
+      return discoveries.get(providerId)?.getState().authUnavailable !== true;
+    },
     async discoverAll(context = {}) {
       const lists = await Promise.all(
         [...discoveries.entries()].map(async ([providerId, discovery]) => ({

@@ -91,6 +91,52 @@ test('首次发现失败返回空列表并在冷却期内复用空缓存', async
   assert.equal(calls, 1);
 });
 
+for (const statusCode of [401, 402, 403]) {
+  test(`provider HTTP ${statusCode} hides previously cached models and allows recovery`, async () => {
+    let attempts = 0;
+    const discovery = createModelDiscovery({
+      provider: provider({ cache_ttl_ms: 1, failure_cooldown_ms: 35 }),
+      logger: silentLogger,
+      fetchModels: async () => {
+        attempts += 1;
+        if (attempts === 2) {
+          throw Object.assign(new Error(`HTTP ${statusCode}`), { statusCode });
+        }
+        return { data: [{ id: 'alpha' }] };
+      },
+    });
+    assert.deepEqual((await discovery.getModels()).map((m) => m.id), ['foo/alpha']);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(await discovery.getModels(), []);
+    assert.equal(discovery.getState().authUnavailable, true);
+    assert.equal(discovery.getState().cachedCount, 0);
+    assert.deepEqual(await discovery.getModels(), []);
+    assert.equal(attempts, 2);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.deepEqual((await discovery.getModels()).map((m) => m.id), ['foo/alpha']);
+    assert.equal(discovery.getState().authUnavailable, false);
+    assert.equal(attempts, 3);
+  });
+}
+
+test('temporary HTTP 429 keeps the last successful catalog', async () => {
+  let attempts = 0;
+  const discovery = createModelDiscovery({
+    provider: provider({ cache_ttl_ms: 1, failure_cooldown_ms: 35 }),
+    logger: silentLogger,
+    fetchModels: async () => {
+      attempts += 1;
+      if (attempts === 2) throw Object.assign(new Error('HTTP 429'), { statusCode: 429 });
+      return { data: [{ id: 'alpha' }] };
+    },
+  });
+  await discovery.getModels();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual((await discovery.getModels()).map((m) => m.id), ['foo/alpha']);
+  assert.equal(discovery.getState().authUnavailable, false);
+  assert.equal(discovery.getState().cachedCount, 1);
+});
+
 async function startModelsServer(handler) {
   const server = http.createServer(handler);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -113,6 +159,29 @@ test('真实通用 /models 请求只携带对应 Provider key', async () => {
     const result = await requestProviderModels(provider({ base_url: mock.baseUrl }), { url: '', mode: 'direct' });
     assert.deepEqual(result, { models: [{ id: 'alpha' }] });
     assert.deepEqual(seen, [{ url: '/v1/models', authorization: 'Bearer foo-key' }]);
+  } finally {
+    await closeServer(mock.server);
+  }
+});
+
+test('upstream discovery errors expose the HTTP status without exposing credentials', async () => {
+  const statuses = [401, 402, 403, 429, 500];
+  let index = 0;
+  const mock = await startModelsServer((_req, res) => {
+    const status = statuses[index++];
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'secret upstream details' } }));
+  });
+  try {
+    for (const statusCode of statuses) {
+      await assert.rejects(
+        requestProviderModels(provider({ base_url: mock.baseUrl })),
+        (error) => error.statusCode === statusCode
+          && error.message.includes(`HTTP ${statusCode}`)
+          && !error.message.includes('secret'),
+      );
+    }
+    assert.equal(index, statuses.length);
   } finally {
     await closeServer(mock.server);
   }

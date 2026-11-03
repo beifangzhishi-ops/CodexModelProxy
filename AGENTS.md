@@ -5,6 +5,7 @@
 - CMP 只支持 Responses API；不得通过 Chat Completions 协议转换冒充 Responses 兼容性。
 - GPT 登录凭据只能转发至 ChatGPT 官方后端；其他 Provider 必须使用各自独立 API Key，不得记录或泄露任何真实认证信息。
 - GPT 透传固定可选模型来自 `proxy-config.json` 的 `providers.chatgpt.models`，始终独立于 `models.txt`；如有当前请求的登录凭据，则实时补充官方目录，不建立 CMP 端账号缓存。裸 `gpt-*` 请求必须保留原始模型 ID 和 ChatGPT 凭据，仅转发到官方后端。其他 Provider 使用短时缓存。
+- 第三方 Provider 的 `/models` 返回 HTTP 401/402/403 时，清空它的成功发现缓存并从目录隐藏其模型、别名及静态条目；此处理不修改 `models.txt`，也不禁止按模型 ID 发起请求。成功刷新后自动恢复；超时、429、5xx 保留最近成功目录。ChatGPT 固定透传模型不能被第三方认证故障隐藏。
 - 不在代码、测试、README、示例配置中保留已失效的固定模型名单、无用别名或旧迁移入口。若确需兼容旧客户端，先征得用户同意。
 - 不为未知能力编造元数据；模型发现只证明出现在上游目录，不能代替 Responses 多轮工具测试。
 

@@ -16,7 +16,7 @@ CMP 仅转发 Responses 请求、整理已知的历史字段格式，不提供 C
 | CPA | `cpa/` | 本机 `providers.local.json` 指定 | 独立 API Key | 上游 `/models`、60 秒缓存 |
 
 * ChatGPT 透传模型由 `proxy-config.json` 中 `providers.chatgpt.models` 的固定可选项保底（当前八个 GPT 型号）；第三方模型不固定版本号。上游的 `display_name`、`context_window` 等元数据按原样映射，缺失字段仅为 Codex 目录格式补全，不代表真实能力已经验证。
-* 第三方目录成功结果在内存中保留 60 秒；失败时沿用最近成功结果，30 秒内不重复尝试。Codex App Server 自己另有模型目录缓存，刷新到模型选择器存在延迟。
+* 第三方模型目录成功结果在内存中保留 60 秒。超时、429、5xx 等临时故障沿用最近成功的模型目录，失败后 30 秒内不重复尝试；上游 `/models` 明确返回 401、402 或 403 时，则立即撤销该 Provider 的旧模型缓存，从 CMP 可选目录隐藏其模型和别名。上游重新认证成功后自动恢复，`models.txt` 的星标不会被更改。Codex App Server 自身另有模型目录缓存，桌面选择器刷新可能延迟。
 * GPT 固定项在目录请求没有登录信息时仍保留；当请求携带 ChatGPT OAuth Bearer、账号标识（如有）和 `client_version` 时，还会实时补充官方模型和元数据，不缓存登录态，也不会把凭据传给第三方。裸 `gpt-*` 请求的模型 ID 和登录凭据会透传至 ChatGPT 官方后端。
 * Kimi 使用开放平台 **按量 API**，不是 Kimi Code 会员接口；未配置密钥时不展示 Kimi 模型，也不阻止 CMP 其他路由启动。
 * 第三方 Provider 使用真实 API 模型 ID，在 Codex 显示 `provider/model`；ChatGPT 透传模型沿用原始 `gpt-*` ID，不添加命名空间前缀。精选列表不能限制 GPT 请求路由。

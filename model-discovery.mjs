@@ -21,6 +21,7 @@ export function createModelDiscovery({
   let lastSuccessAt = 0;
   let lastAttemptAt = 0;
   let lastFailureAt = 0;
+  let authUnavailable = false;
   let refreshPromise = null;
 
   return {
@@ -42,11 +43,20 @@ export function createModelDiscovery({
             cachedModels = models;
             lastSuccessAt = Date.now();
             lastFailureAt = 0;
+            authUnavailable = false;
             return cachedModels;
           })
           .catch((err) => {
             lastFailureAt = Date.now();
-            const fallback = lastSuccessAt > 0 ? '使用最近缓存' : '暂无缓存';
+            // Credentials, account access or billing have been rejected by
+            // the provider. A previously cached catalog is no longer evidence
+            // that these models can be used. Do not silently keep listing it.
+            if ([401, 402, 403].includes(err?.statusCode)) {
+              authUnavailable = true;
+              lastSuccessAt = 0;
+              cachedModels = [];
+            }
+            const fallback = authUnavailable ? '已隐藏不可用模型' : lastSuccessAt > 0 ? '使用最近缓存' : '暂无缓存';
             logger.warn(
               `[codex-proxy] Provider ${provider.id} 模型同步失败，${fallback}：${err.message}`,
             );
@@ -64,6 +74,7 @@ export function createModelDiscovery({
         lastSuccessAt,
         lastAttemptAt,
         lastFailureAt,
+        authUnavailable,
         refreshing: Boolean(refreshPromise),
       };
     },
@@ -199,7 +210,9 @@ export function requestProviderModels(provider, proxy = { url: '', mode: 'direct
         const status = response.statusCode || 500;
         const raw = Buffer.concat(chunks).toString('utf8');
         if (status < 200 || status >= 300) {
-          finish(new Error(`Provider ${provider.id} /models 返回 HTTP ${status}`));
+          const error = new Error(`Provider ${provider.id} /models 返回 HTTP ${status}`);
+          error.statusCode = status;
+          finish(error);
           return;
         }
         try {

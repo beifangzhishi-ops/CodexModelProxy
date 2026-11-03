@@ -44,8 +44,11 @@ export async function sendModelList(res, registry, sendJson, context = {}, selec
   const thirdPartyDynamic = dynamicModels.filter((model) => model.provider_id !== passthrough?.id || !hasPassthrough);
   // Public ChatGPT IDs are already emitted as unprefixed passthrough entries.
   // Do not list the same model a second time through a configured public alias.
-  const publicSlugs = visiblePublicSlugs(registry).filter((slug) =>
-    !hasPassthrough || resolveModelSelection(slug, registry).provider_id !== passthrough.id);
+  const publicSlugs = visiblePublicSlugs(registry).filter((slug) => {
+    const providerId = resolveModelSelection(slug, registry).provider_id;
+    return (!hasPassthrough || providerId !== passthrough.id)
+      && registry.isCatalogProviderAvailable(providerId);
+  });
   const publicCatalog = publicSlugs.map((slug, index) => {
     const selection = resolveModelSelection(slug, registry);
     return buildCatalogForSelection(slug, selection, registry, index + 1);
@@ -80,6 +83,7 @@ export async function sendModelList(res, registry, sendJson, context = {}, selec
       .filter((slug) => !dynamicIds.has(slug))
       .filter((slug) => !publicSlugs.includes(slug))
       .filter((slug) => !hasPassthrough || !slug.startsWith(passthrough.model_prefix))
+      .filter((slug) => registry.isCatalogProviderAvailable(resolveModelSelection(slug, registry).provider_id))
     : [];
   const canonicalCatalog = canonicalIds.map((slug, index) => {
     const selection = resolveModelSelection(slug, registry);

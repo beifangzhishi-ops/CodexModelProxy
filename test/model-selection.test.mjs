@@ -135,3 +135,74 @@ test('ChatGPT passthrough stays selectable without stars or login; only third-pa
     assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /chatgpt\/|gpt-new/);
   });
 });
+
+test('auth-rejected third-party provider disappears from catalog while GPT and healthy favorites remain', async () => {
+  await withSelectionFile(async (file) => {
+    const original = '* oc/alpha\n* oc-alias\n* ds/selected\n';
+    fs.writeFileSync(file, original);
+    let ocAttempts = 0;
+    const registry = createProviderRegistry({
+      config: {
+        expose_canonical_models: true,
+        aliases: { 'oc-alias': 'oc/alpha' },
+        providers: {
+          chatgpt: {
+            enabled: true, base_url: 'https://chatgpt.example/codex',
+            auth_mode: 'openai_passthrough', protocol: 'responses',
+            model_prefix: 'chatgpt/', discover_models: false,
+            compat_profile: 'openai', models: { 'gpt-6.1-sol': {} },
+          },
+          opencode: {
+            enabled: true, base_url: 'https://opencode.example/v1',
+            api_key: 'fixture-key', auth_mode: 'api_key', protocol: 'responses',
+            model_prefix: 'oc/', discover_models: true,
+            compat_profile: 'passthrough', models: { alpha: {} },
+            cache_ttl_ms: 1, failure_cooldown_ms: 35,
+          },
+          ds: {
+            enabled: true, base_url: 'https://ds.example/v1',
+            api_key: 'fixture-key', auth_mode: 'api_key', protocol: 'responses',
+            model_prefix: 'ds/', discover_models: true,
+            compat_profile: 'passthrough',
+          },
+        },
+      },
+      localConfig: { providers: {} },
+      logger,
+      discoveryFetchModels: async (provider) => {
+        if (provider.id === 'opencode') {
+          ocAttempts += 1;
+          if (ocAttempts === 2) {
+            throw Object.assign(new Error('HTTP 401'), { statusCode: 401 });
+          }
+          return { data: [{ id: 'alpha' }] };
+        }
+        return { data: [{ id: 'selected' }] };
+      },
+    });
+    const getIds = async () => {
+      let result;
+      await sendModelList({}, registry, (_, status, payload) => {
+        assert.equal(status, 200);
+        result = payload;
+      }, {}, file);
+      assert.deepEqual(result.models.map((model) => model.slug), result.data.map((model) => model.id));
+      return result.data.map((model) => model.id);
+    };
+    const initial = await getIds();
+    assert.ok(initial.includes('oc-alias'));
+    assert.ok(initial.includes('oc/alpha'));
+    assert.ok(initial.includes('ds/selected'));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(await getIds(), ['gpt-6.1-sol', 'ds/selected']);
+    assert.equal(registry.isCatalogProviderAvailable('opencode'), false);
+    assert.equal(fs.readFileSync(file, 'utf8'), original);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const recovered = await getIds();
+    assert.ok(recovered.includes('oc-alias'));
+    assert.ok(recovered.includes('oc/alpha'));
+    assert.equal(registry.isCatalogProviderAvailable('opencode'), true);
+    assert.equal(fs.readFileSync(file, 'utf8'), original);
+    assert.equal(ocAttempts, 3);
+  });
+});
