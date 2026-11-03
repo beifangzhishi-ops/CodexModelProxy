@@ -12,8 +12,6 @@ $managedTopKeys = @(
     'forced_login_method',
     'model_catalog_json'
 )
-$providerTableName = 'model_providers.OpenAI'
-
 function Get-NewLine([string]$Text) {
     if ($Text.Contains("`r`n")) { return "`r`n" }
     return "`n"
@@ -79,18 +77,20 @@ $currentText = [IO.File]::ReadAllText($currentPath)
 $newLine = Get-NewLine $currentText
 
 $targetTop = Get-TopAssignments $targetText $managedTopKeys
-foreach ($requiredKey in @('model_provider', 'model', 'model_reasoning_effort', 'forced_login_method')) {
+foreach ($requiredKey in @('model_provider', 'model', 'model_reasoning_effort')) {
     if (-not $targetTop.ContainsKey($requiredKey)) { throw ('Target config missing key: ' + $requiredKey) }
 }
 
 $providerId = Convert-TomlString $targetTop['model_provider'] 'model_provider'
-if ($providerId -ne 'OpenAI') {
-    throw ('Only OpenAI, OC, DS and UNI templates are supported; provider is: ' + $providerId)
+if ($providerId -notmatch '^[A-Za-z0-9_-]+$') {
+    throw ('Provider id must be a TOML bare key: ' + $providerId)
 }
+$providerTableName = 'model_providers.' + $providerId
+$providerHeaderPattern = '(?m)^[ \t]*\[' + [regex]::Escape($providerTableName) + '\][^\r\n]*'
 
 $targetProviderSpan = Get-TableSpan $targetText $providerTableName
 if ($null -eq $targetProviderSpan) { throw ('Target config missing [' + $providerTableName + ']') }
-if ([regex]::Matches($targetText, '(?m)^[ \t]*\[model_providers\.OpenAI\][^\r\n]*').Count -ne 1) {
+if ([regex]::Matches($targetText, $providerHeaderPattern).Count -ne 1) {
     throw ('Target config has duplicate [' + $providerTableName + '] sections')
 }
 $targetProviderBlock = $targetText.Substring($targetProviderSpan.Start, $targetProviderSpan.Length)
@@ -134,7 +134,7 @@ if (-not $newTopText.EndsWith($newLine)) { $newTopText += $newLine }
 $newText = $newTopText + $currentRestText
 
 # Replace the entire active provider section so auth and proxy fields cannot leak between profiles.
-$currentProviderMatches = [regex]::Matches($newText, '(?m)^[ \t]*\[model_providers\.OpenAI\][^\r\n]*')
+$currentProviderMatches = [regex]::Matches($newText, $providerHeaderPattern)
 if ($currentProviderMatches.Count -gt 1) { throw ('Current config has duplicate [' + $providerTableName + '] sections') }
 $currentProviderSpan = Get-TableSpan $newText $providerTableName
 if ($null -eq $currentProviderSpan) {
@@ -156,9 +156,19 @@ foreach ($key in $targetTop.Keys) {
 }
 $finalProviderSpan = Get-TableSpan $newText $providerTableName
 if ($null -eq $finalProviderSpan) { throw ('Switch result missing [' + $providerTableName + ']') }
-if ([regex]::Matches($newText, '(?m)^[ \t]*\[model_providers\.OpenAI\][^\r\n]*').Count -ne 1) {
+if ([regex]::Matches($newText, $providerHeaderPattern).Count -ne 1) {
     throw ('Switch result has duplicate [' + $providerTableName + '] sections')
 }
+
+if ($newText -ceq $currentText) {
+    Write-Host ('Config already active: ' + [IO.Path]::GetFileName($targetPath))
+    return
+}
+
+$backupDir = Join-Path $basePath 'backup-switch'
+[IO.Directory]::CreateDirectory($backupDir) | Out-Null
+$backupPath = Join-Path $backupDir ('config.toml.' + (Get-Date -Format 'yyyyMMdd-HHmmssfff') + '.bak')
+[IO.File]::WriteAllText($backupPath, $currentText, [Text.UTF8Encoding]::new($false))
 
 $tempPath = $currentPath + '.tmp.' + $PID
 try {
@@ -169,4 +179,5 @@ finally {
     if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
 }
 
+Write-Host ('Backup: ' + $backupPath)
 Write-Host ('Switched config: ' + [IO.Path]::GetFileName($targetPath))

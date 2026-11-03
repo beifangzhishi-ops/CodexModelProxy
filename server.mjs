@@ -314,7 +314,7 @@ export function createProxyServer({
         authorization: getHeader(req, 'authorization'),
         accountId: getHeader(req, 'chatgpt-account-id'),
         clientVersion: url.searchParams.get('client_version') || '',
-      }).catch((err) => {
+      }, config.model_selection_file ? path.join(__dirname, config.model_selection_file) : '').catch((err) => {
         logger.error(`[codex-proxy] 模型列表生成失败：${err.message}`);
         if (!res.headersSent) {
           sendJson(res, 500, {

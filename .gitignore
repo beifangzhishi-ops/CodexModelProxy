@@ -1,6 +1,9 @@
 proxy-secrets.env
 proxy-local.env
 providers.local.json
+models.txt
+__pycache__/
+.cache/
 proxy.pid
 proxy.log
 proxy.err.log

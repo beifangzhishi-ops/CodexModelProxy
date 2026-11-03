@@ -3,6 +3,7 @@
   "port": 8787,
   "pid_file": "proxy.pid",
   "expose_canonical_models": false,
+  "model_selection_file": "models.txt",
   "providers": {
     "chatgpt": {
       "enabled": true,

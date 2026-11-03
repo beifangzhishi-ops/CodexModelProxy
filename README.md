@@ -31,7 +31,28 @@ CMP 仅转发 Responses 请求、整理已知的历史字段格式，不提供 C
 
 ### Codex 接入
 
-在 Codex `config.toml` 中配置一个指向本地 CMP 的 Responses Provider，并保持 ChatGPT 登录认证方式。当前项目提供 `config-templates/` 示例，示例内的值应按本机设置后再使用。不要直接执行未经核对的旧版 `.codex/config_*.cmd`。
+Codex 只保留两种配置：**官方直连**和 **CMP**。安装脚本 `codex-switch/install.py` 在每台电脑本地生成 `.codex/config_official.toml`、`.codex/config_cmp.toml` 和两个可双击的 CMD。两种配置复用一个经过验证的 `switch_config.ps1`，不会编辑登录凭据、MCP 或插件；旧切换脚本归档至 `.codex/backup-switch`。
+
+**官方直连与 CMP 完全独立。** 即使 CMP 没启动、模型同步失败或者代理出现 500/502，双击 `官方直连.cmd` 也无需连接 CMP 就能把 Codex 配置恢复到 OpenAI 官方后端。切换脚本只改本地 Codex 配置，绝不自动重启 CMP 或关闭 Codex。
+
+### 精选模型文件
+
+CMP 在项目根目录生成唯一的可编辑文件 `models.txt`（已忽略 Git，不随代码更新覆盖）。首次请求 `GET /v1/models` 并发现模型后生成文件，之后每次获取目录都会补充上游新增的模型 ID；对已经存在的行不做重写，不删除你写的注释和星标。
+
+```text
+# 在完整模型 ID 前加 *，显示在 Codex 下拉列表
+* ds/deepseek-flash
+* kimi/kimi-k2.7-code
+  kimi/kimi-k2.7-code-highspeed
+```
+
+- 在行首添加 `* ` 表示显示，去掉表示隐藏；文件中的名称可以直接选中复制，不必重新输入模型 ID。
+- CMP 仍然自动发现全部模型并允许按完整 ID 调用，**不在下拉框显示≠禁止请求**。只有实时发现成功的模型才会在下拉框显示。
+- 默认只精选一个普通 DeepSeek Flash 和一个普通 Kimi Coding 模型，不会自动选中高速计费版本。后续新增的模型自动追加为未选中。
+- 你手工编辑的行不会被刷新覆盖；如果当前所有精选模型都暂时不可用，为避免模型菜单空白，临时展示一个已发现的模型，原星标不变。
+- 修改 `models.txt` 后，Codex 可能需要重新加载模型列表或重新打开桌面端。CMP 目录无须重启，新请求就会重新读取文件。
+
+安装后桌面提供 **Codex-官方直连**、**Codex-CMP模式** 两个快捷方式，以及用记事本打开这份 `models.txt` 的 **CMP-模型精选** 快捷方式；快捷方式只负责打开文件/脚本，不另外生成模型配置。
 
 切换 Provider 或首次启用远端模型目录后，Codex App Server 可能需要完全重启，模型目录也会缓存一段时间。**维护代理时不得由 Agent 自行重启运行中的 CMP**；否则可能中断当前任务。
 
@@ -52,6 +73,8 @@ CMP 仅转发 Responses 请求、整理已知的历史字段格式，不提供 C
 | `model-discovery.mjs` | 实时/缓存模型发现与元数据转换 |
 | `model-catalog.mjs`、`model-metadata.mjs` | Codex 模型目录组织与能力字段 |
 | `model-resolver.mjs` | 模型命名空间解析、路由参数 |
+| `model-selection.mjs`、`models.txt` | 根据真实发现结果追加模型名，并管理 Codex 下拉列表精选 |
+| `codex-switch/` | 官方直连 / CMP 双模式 CMD 安装和回归测试 |
 | `history-normalize.mjs`、`history-monitor.mjs` | 兼容字段整理、脱敏诊断 |
 | `compact-forward.mjs`、`muse-tool-compat.mjs` | 压缩请求与 Muse 工具协议适配 |
 | `test/` | 模拟上游的回归测试，不消耗真实模型额度 |

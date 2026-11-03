@@ -3,8 +3,9 @@
 
 import { buildCatalogModel } from './model-metadata.mjs';
 import { resolveModelSelection } from './model-resolver.mjs';
+import { syncModelSelection } from './model-selection.mjs';
 
-export async function sendModelList(res, registry, sendJson, context = {}) {
+export async function sendModelList(res, registry, sendJson, context = {}, selectionFile = '') {
   const dynamicModels = await registry.discoverAll(context);
   const publicSlugs = visiblePublicSlugs(registry);
   const publicCatalog = publicSlugs.map((slug, index) => {
@@ -57,10 +58,21 @@ export async function sendModelList(res, registry, sendJson, context = {}) {
     owned_by: 'unified',
   }));
 
+  const allModels = [...publicCatalog, ...canonicalCatalog, ...dynamicCatalog];
+  const allData = [...staticData, ...canonicalData, ...dynamicModels];
+  let selected = null;
+  if (selectionFile) {
+    try {
+      selected = syncModelSelection(selectionFile, allData, registry.logger);
+    } catch (error) {
+      // Picker selection must never prevent a working proxy from serving models.
+      registry.logger?.warn?.('[codex-proxy] Cannot update model selection file: ' + error.message);
+    }
+  }
   sendJson(res, 200, {
     object: 'list',
-    models: [...publicCatalog, ...canonicalCatalog, ...dynamicCatalog],
-    data: [...staticData, ...canonicalData, ...dynamicModels],
+    models: selected ? allModels.filter((model) => selected.has(model.slug)) : allModels,
+    data: selected ? allData.filter((model) => selected.has(model.id)) : allData,
   });
 }
 
