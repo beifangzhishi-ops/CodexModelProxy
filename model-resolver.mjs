@@ -26,9 +26,11 @@ export function resolveModelSelection(model, registry) {
   const reference = parseModelReference(model);
   if (reference.kind === 'invalid') return invalidModel(model);
 
-  // Unprefixed GPT IDs must go to ChatGPT itself, not through a third-party
-  // alias. Listing favorites must not affect official passthrough routing.
-  if (reference.kind === 'legacy' && reference.raw.startsWith('gpt-')) {
+  // Official GPT and Codex auto-review IDs must reach ChatGPT itself, not
+  // third-party aliases. The reserve ID is already covered by gpt-*.
+  if (reference.kind === 'legacy' && (
+    reference.raw.startsWith('gpt-') || reference.raw === 'codex-auto-review'
+  )) {
     const provider = registry.getProvider('chatgpt');
     if (provider?.enabled && provider.auth_mode === 'openai_passthrough') {
       const selection = resolveModelSelection(`${provider.model_prefix}${reference.raw}`, registry);

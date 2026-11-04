@@ -39,6 +39,15 @@ const DEFAULT_CONFIG_FILE = path.join(__dirname, 'proxy-config.json');
 const DEFAULT_SECRETS_FILE = path.join(__dirname, 'proxy-secrets.env');
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 600000;
+// Codex calls these provider-relative endpoints outside the Responses API.
+// Keep this allowlist explicit: never turn CMP into an arbitrary HTTP proxy.
+const CHATGPT_NATIVE_POST_PATHS = new Set([
+  '/v1/images/generations',
+  '/v1/images/edits',
+  '/v1/alpha/search',
+  '/v1/memories/trace_summarize',
+  '/v1/realtime/calls',
+]);
 
 const VALID_TOOL_SCHEMA_COMPAT = new Set(['muse']);
 export function isValidToolSchemaCompat(value) {
@@ -325,6 +334,30 @@ export function createProxyServer({
       return;
     }
 
+    if (req.method === 'POST' && CHATGPT_NATIVE_POST_PATHS.has(pathname)) {
+      const provider = registry.getProvider('chatgpt');
+      if (!provider?.enabled || provider.auth_mode !== 'openai_passthrough') {
+        sendJson(res, 503, { error: { type: 'upstream_unavailable', message: 'ChatGPT 透传不可用' } });
+        return;
+      }
+      if (!getHeader(req, 'authorization')) {
+        sendJson(res, 401, { error: { type: 'authentication_error', message: '缺少 ChatGPT 登录认证' } });
+        return;
+      }
+      void proxyForModel('chatgpt', provider.network).then(({ url: proxyUrl, mode }) => {
+        forwardChatGptNativeRequest({
+          req, res, pathname, query: url.search, provider,
+          proxyUrl, networkMode: mode, logger,
+        });
+      }).catch((err) => {
+        logger.error(`[codex-proxy] ChatGPT 原生接口网络配置失败 endpoint=${pathname} err=${err.message}`);
+        if (!res.headersSent) {
+          sendJson(res, 502, { error: { type: 'upstream_error', message: '无法确定上游代理' } });
+        }
+      });
+      return;
+    }
+
     if (req.method === 'POST' && pathname === '/v1/responses') {
       readJsonBody(req, async (err, body) => {
         if (err) {
@@ -443,6 +476,52 @@ function safeEqual(a, b) {
 function getHeader(req, name) {
   const value = req.headers[name.toLowerCase()];
   return Array.isArray(value) ? (value[0] || '') : (value || '');
+}
+
+function forwardChatGptNativeRequest({
+  req, res, pathname, query, provider, proxyUrl, networkMode, logger,
+}) {
+  let upstreamUrl;
+  try {
+    upstreamUrl = new URL(`${provider.base_url}${pathname.slice('/v1'.length)}${query}`);
+    if (upstreamUrl.protocol !== 'https:' && upstreamUrl.protocol !== 'http:') {
+      throw new Error('不支持的上游协议');
+    }
+  } catch {
+    sendJson(res, 500, { error: { type: 'server_error', message: 'ChatGPT 上游地址无效' } });
+    return;
+  }
+  const headers = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    const lower = key.toLowerCase();
+    if (lower === 'host' || lower === 'x-proxy-access-token' || HOP_BY_HOP_HEADERS.has(lower)) continue;
+    headers[key] = value;
+  }
+  const lib = upstreamUrl.protocol === 'https:' ? https : http;
+  const agent = upstreamUrl.protocol === 'https:' && proxyUrl ? createProxyAgent(proxyUrl) : undefined;
+  const startedAt = Date.now();
+  const outgoing = lib.request(upstreamUrl, { method: 'POST', headers, ...(agent ? { agent } : {}) }, (upRes) => {
+    const status = upRes.statusCode || 502;
+    const responseHeaders = {};
+    for (const [key, value] of Object.entries(upRes.headers)) {
+      if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) responseHeaders[key] = value;
+    }
+    logger.info(`[codex-proxy] POST ${pathname} provider=chatgpt network=${networkMode} status=${status} duration_ms=${Date.now() - startedAt}`);
+    res.writeHead(status, responseHeaders);
+    upRes.pipe(res);
+  });
+  outgoing.setTimeout(UPSTREAM_TIMEOUT_MS, () => outgoing.destroy(new Error('上游响应超时')));
+  outgoing.on('error', (err) => {
+    logger.error(`[codex-proxy] ChatGPT 原生接口失败 endpoint=${pathname} network=${networkMode} err=${err.message}`);
+    if (!res.headersSent) {
+      sendJson(res, 502, { error: { type: 'upstream_error', message: 'ChatGPT 原生接口请求失败' } });
+    } else {
+      res.destroy();
+    }
+  });
+  req.on('error', (err) => outgoing.destroy(err));
+  res.on('close', () => outgoing.destroy());
+  req.pipe(outgoing);
 }
 
 function summarizeResponsesRequest(body) {

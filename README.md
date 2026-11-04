@@ -76,6 +76,24 @@ Codex may need to be reopened after configuration changes; CMP must not be autom
 
 ## 模块
 
+### Codex 原生非 Responses 接口
+
+CMP 的对话协议仍为原生 Responses API，不提供 Chat Completions 转换。Codex 内置功能还会以同一个 `base_url` 请求其他接口；CMP 对以下已核对的 ChatGPT 原生接口实行**固定路径白名单、登录凭据透传、请求体/响应体原样传输**，不进行模型路由或 JSON 协议转换：
+
+| 请求 | 功能 |
+| --- | --- |
+| `POST /v1/images/generations` | 内置 ImgGen 生图 |
+| `POST /v1/images/edits` | 内置 ImgGen 修图 |
+| `POST /v1/alpha/search` | Codex 独立搜索 |
+| `POST /v1/memories/trace_summarize` | Codex 记忆摘要 |
+| `POST /v1/realtime/calls` | Codex Realtime 通话创建 |
+
+这些接口仅转发给启用中的 `chatgpt` 登录透传 Provider；保留原始 Content-Type、OAuth 与账号头，不把本地访问令牌传给上游，也不向第三方 Provider 分流。模型 `gpt-reserve`（Luna Reserve）属于原有 `gpt-*` 官方透传路由；`codex-auto-review` 属于 Codex 官方审查专用 ID，也直接透传 ChatGPT 后端。不要求这两个 ID 出现在精选文件。原生 WebSocket Upgrade **尚未实现**，不能把 HTTP Responses 转发视作 WebSocket 兼容保证。
+
+所有新增接口的测试使用本机 mock HTTP 服务，不请求真实图像生成 API，也不消耗生成额度。
+
+### 模块文件
+
 | 文件 | 职责 |
 | --- | --- |
 | `server.mjs` | HTTP 服务、请求授权、Responses 转发 |

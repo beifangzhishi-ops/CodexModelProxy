@@ -1,6 +1,9 @@
 # CodexModelProxy 项目规则
 
 ## 工作边界
+
+- 对话请求只支持 Responses API，不做 Chat Completions 协议转换。Codex 内置的 ImgGen、独立搜索、记忆摘要和 Realtime 创建请求可通过固定的原生 POST 白名单直通 ChatGPT 登录后端；绝不建立任意路径转发、向第三方泄露 ChatGPT OAuth，或把 HTTP 透传宣称成 WebSocket 兼容。
+- `gpt-reserve` 按 `gpt-*` 原始模型 ID 透传；`codex-auto-review` 为 Codex 专有审查模型 ID，保持原始 ID 和 ChatGPT 凭据。不加入精选文件、也不把它们改写成普通聊天模型。
 - **禁止 Agent 自行启动、停止或重启运行中的 CMP**，避免当前 Codex 会话断线。只允许静态检查和模拟上游的本地测试，真实部署由用户安排。
 - CMP 只支持 Responses API；不得通过 Chat Completions 协议转换冒充 Responses 兼容性。
 - GPT 登录凭据只能转发至 ChatGPT 官方后端；其他 Provider 必须使用各自独立 API Key，不得记录或泄露任何真实认证信息。
