@@ -312,6 +312,9 @@ function copyRequestHeaders(sourceHeaders, route = {}) {
       lower === 'authorization' ||
       lower === 'x-proxy-access-token' ||
       lower === 'content-length' ||
+      lower === 'content-encoding' ||
+      lower === 'content-md5' ||
+      lower === 'content-digest' ||
       (route.strip_client_credentials === true && CLIENT_CREDENTIAL_HEADERS.has(lower)) ||
       HOP_BY_HOP_HEADERS.has(lower)
     ) {

@@ -32,3 +32,4 @@
 - 官方直连与 CMP 模式均使用内置小写 `openai` Provider。官方配置不得携带 `openai_base_url`；CMP 配置仅用顶层 `openai_base_url`，有本地访问令牌时使用经过校验的本地 URL 认证前缀，不能弱化原来的访问控制。切换器必须保持插件与 MCP 配置不变，并清理无效的 Provider 覆盖表；CMP 未实现 WebSocket 透传，必须明确回退 HTTP。
 - CMP authentication URLs must follow the server-side token configuration, never an inherited Codex header; omit the auth segment when no token is configured.
 - Rejected WebSocket Upgrade sockets must have their own error handler; client ECONNRESET must not crash CMP. Keep mock tests for abrupt disconnects and the HTTP 426 fallback.
+- Both Responses and compact must decode client Content-Encoding (including zstd from the native Codex provider) with an expanded-body size bound. Never forward stale content-encoding, content-md5, or content-digest headers after rebuilding JSON; cover compression in mock upstream tests.

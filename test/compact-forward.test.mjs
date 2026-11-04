@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import zlib from 'node:zlib';
 import { createProxyServer } from '../server.mjs';
 
 const silentLogger = { info() {}, error() {}, warn() {} };
@@ -14,7 +15,7 @@ function startMockUpstream({ status = 200, statusByModel = {}, hangModels = new 
     req.on('end', () => {
       const raw = Buffer.concat(chunks).toString('utf8');
       const body = raw ? JSON.parse(raw) : {};
-      seen.push({ url: req.url, auth: req.headers.authorization || '', body });
+      seen.push({ url: req.url, auth: req.headers.authorization || '', body, headers: req.headers });
       if (networkErrorModels.has(body.model)) {
         req.socket.destroy();
         return;
@@ -110,6 +111,30 @@ async function withServers(mockOptions, proxyOptions, fn) {
     await closeServer(upstream.server);
   }
 }
+
+test('zstd-compressed compact requests forward decoded JSON without stale body headers', async () => {
+  await withServers({}, {}, async (upstream, proxy) => {
+    const payload = JSON.stringify({ model: 'gpt-model', input: [{ role: 'user', content: 'ping' }] });
+    const response = await fetch(`${proxy.baseUrl}/v1/responses/compact`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer caller-token',
+        'content-type': 'application/json',
+        'content-encoding': 'zstd',
+        'content-digest': 'stale-digest',
+      },
+      body: zlib.zstdCompressSync(Buffer.from(payload)),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.object, 'response.compaction');
+    assert.equal(upstream.seen.length, 1);
+    assert.equal(upstream.seen[0].body.model, 'gpt-upstream');
+    assert.equal(upstream.seen[0].headers['content-encoding'], undefined);
+    assert.equal(upstream.seen[0].headers['content-digest'], undefined);
+    assert.equal(upstream.seen[0].auth, 'Bearer caller-token');
+  });
+});
 
 test('GPT compact 失败只请求当前模型一次', async () => {
   await withServers({ statusByModel: { 'gpt-upstream': 503 } }, {}, async (upstream, proxy) => {

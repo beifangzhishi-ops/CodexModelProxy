@@ -5,6 +5,7 @@
 
 import http from 'node:http';
 import https from 'node:https';
+import zlib from 'node:zlib';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -638,15 +639,42 @@ function readJsonBody(req, callback) {
   });
   req.on('end', () => {
     if (done) return;
-    const raw = Buffer.concat(chunks).toString('utf8');
-    if (!raw.trim()) {
-      finish(new Error('请求体为空'));
-      return;
-    }
     try {
-      finish(null, JSON.parse(raw));
+      const raw = Buffer.concat(chunks);
+      const encoding = getHeader(req, 'content-encoding').trim().toLowerCase();
+      const decodeOptions = { maxOutputLength: MAX_BODY_BYTES };
+      let decoded;
+      switch (encoding) {
+        case '':
+        case 'identity':
+          decoded = raw;
+          break;
+        case 'zstd':
+          if (typeof zlib.zstdDecompressSync !== 'function') {
+            throw new Error('当前 Node.js 不支持 zstd 请求解压');
+          }
+          decoded = zlib.zstdDecompressSync(raw, decodeOptions);
+          break;
+        case 'gzip':
+          decoded = zlib.gunzipSync(raw, decodeOptions);
+          break;
+        case 'deflate':
+          decoded = zlib.inflateSync(raw, decodeOptions);
+          break;
+        case 'br':
+          decoded = zlib.brotliDecompressSync(raw, decodeOptions);
+          break;
+        default:
+          throw new Error(`不支持的 Content-Encoding: ${encoding}`);
+      }
+      if (decoded.byteLength > MAX_BODY_BYTES) {
+        throw new Error('解压后的请求体过大');
+      }
+      const json = decoded.toString('utf8');
+      if (!json.trim()) throw new Error('请求体为空');
+      finish(null, JSON.parse(json));
     } catch (err) {
-      finish(new Error(`JSON 解析失败：${err.message}`));
+      finish(new Error(`请求体解码或 JSON 解析失败：${err.message}`));
     }
   });
   req.on('error', (err) => finish(err));
@@ -863,6 +891,9 @@ function forwardToUpstream(
       lower === 'authorization' ||
       lower === 'x-proxy-access-token' ||
       lower === 'content-length' ||
+      lower === 'content-encoding' ||
+      lower === 'content-md5' ||
+      lower === 'content-digest' ||
       (route.strip_client_credentials === true && CLIENT_CREDENTIAL_HEADERS.has(lower)) ||
       HOP_BY_HOP_HEADERS.has(lower)
     ) {
