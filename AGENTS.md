@@ -28,3 +28,4 @@
 - 只维护 `codex-switch/` 下的一套切换程序，两台电脑生成相同的官方/CMP 双配置，归档多余旧模板后不可恢复旧活动入口。
 - 官方直连、CMP 模式和模型精选三个快捷方式只放在 CMP 项目根目录，安装程序不得在桌面创建快捷方式；本机 `.lnk` 不提交 Git。
 - Keep the .codex top-level tidy with codex-switch/tidy_root.py after preview. Archive old root-level configurations and model lists, delete only orphaned state-temp files older than 7 days, never prune current caches, sessions, authentication, or databases.
+- 模型自动发现必须保留上游可验证的上下文长度和能力字段；任何未知窗口不得写死为统一假值。`context_window` 与 `max_context_window` 不能混用，其他 token 限额不得冒充总窗口。无登录凭据的 GPT 固定可选列表不是官方实时模型目录。

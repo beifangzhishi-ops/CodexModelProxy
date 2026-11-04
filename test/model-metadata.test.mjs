@@ -60,6 +60,7 @@ test('上游原生 instructions_template 优先，存在时不注入通用 base_
   assert.equal(model.model_messages.instructions_template, 'upstream instructions');
   assert.equal(model.base_instructions, undefined);
   assert.equal(model.context_window, 400000);
+  assert.equal(model.max_context_window, undefined);
   assert.deepEqual(model.input_modalities, ['text']);
   assert.equal(hasRequiredInstructions(model), true);
 });
@@ -87,6 +88,53 @@ test('model_overrides 可以只覆盖 metadata profile 和显式 metadata', () =
   assert.deepEqual(model.input_modalities, ['text', 'image']);
   assert.equal(model.supports_image_detail_original, true);
   assert.equal(model.context_window, 200000);
+});
+
+test('没有上游上下文信息时不捏造 128k，也不伪造压缩阈值', () => {
+  const model = buildCatalogModel({
+    id: 'oc/unknown-new-model', modelName: 'unknown-new-model', provider: provider(),
+    source: { id: 'oc/unknown-new-model' },
+  });
+  assert.equal(model.context_window, undefined);
+  assert.equal(model.max_context_window, undefined);
+  assert.equal(model.auto_compact_token_limit, undefined);
+  assert.equal(model.effective_context_window_percent, 95);
+});
+
+test('优先使用自动发现的原生、嵌套和通用 context_length 元数据', () => {
+  const native = buildCatalogModel({
+    id: 'ds/large', modelName: 'large', provider: provider(),
+    source: { context_window: 1048576, metadata: { max_context_window: 2097152 } },
+  });
+  assert.equal(native.context_window, 1048576);
+  assert.equal(native.max_context_window, 2097152);
+
+  const nested = buildCatalogModel({
+    id: 'oc/nested', modelName: 'nested', provider: provider(),
+    source: { metadata: { context_length: '262144', effective_context_window_percent: 90 } },
+  });
+  assert.equal(nested.context_window, 262144);
+  assert.equal(nested.effective_context_window_percent, 90);
+
+  const top = buildCatalogModel({
+    id: 'oc/top', modelName: 'top', provider: provider(),
+    source: { model_metadata: { context_window: 65536 }, context_window: 400000 },
+  });
+  assert.equal(top.context_window, 400000);
+});
+
+test('坏的上下文数据不会污染 Codex 目录或产生小于实际窗口的最大值', () => {
+  const model = buildCatalogModel({
+    id: 'oc/bad', modelName: 'bad', provider: provider(),
+    source: {
+      context_window: '524288', max_context_window: 128000,
+      auto_compact_token_limit: 'invalid', effective_context_window_percent: 999,
+    },
+  });
+  assert.equal(model.context_window, 524288);
+  assert.equal(model.max_context_window, undefined);
+  assert.equal(model.auto_compact_token_limit, undefined);
+  assert.equal(model.effective_context_window_percent, 95);
 });
 
 test('静态 alias 不依赖 retired-model-file.json 也能生成完整模型目录', async () => {
@@ -129,6 +177,7 @@ test('静态 alias 不依赖 retired-model-file.json 也能生成完整模型目
     assert.deepEqual(payload.data.map((item) => item.id), ['gpt-fixture-sol']);
     assert.deepEqual(payload.models.map((item) => item.slug), ['gpt-fixture-sol']);
     assert.equal(payload.models[0].display_name, '5.6 Sol');
+    assert.equal(payload.models[0].context_window, undefined);
     assert.equal(hasRequiredInstructions(payload.models[0]), true);
   } finally {
     await new Promise((resolve) => server.close(resolve));

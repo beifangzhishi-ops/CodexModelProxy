@@ -94,8 +94,15 @@ export function createPassthroughModelDiscovery(options = {}) {
           options.provider, proxy, context,
         );
         return normalizeDiscoveredModels(payload, options.provider);
-      } catch {
-        options.logger?.warn?.('ChatGPT model discovery failed');
+      } catch (error) {
+        // Do not emit upstream error bodies, request headers or OAuth tokens.
+        const status = Number(error?.statusCode);
+        const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,40}$/.test(error.code)
+          ? error.code : '';
+        const reason = Number.isInteger(status) && status >= 100 && status <= 599
+          ? `HTTP ${status}`
+          : code || 'network or catalog error';
+        options.logger?.warn?.(`ChatGPT model discovery failed (${reason})`);
         return [];
       }
     },

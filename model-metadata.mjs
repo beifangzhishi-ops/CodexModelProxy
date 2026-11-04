@@ -35,8 +35,8 @@ const BASE_METADATA = Object.freeze({
   truncation_policy: { mode: 'tokens', limit: 10000 },
   supports_parallel_tool_calls: true,
   supports_image_detail_original: false,
-  context_window: 128000,
-  max_context_window: 128000,
+  // Unknown windows must remain unknown. Codex accepts nullable context limits;
+  // inventing 128k here makes its compaction logic fire prematurely.
   effective_context_window_percent: 95,
   experimental_supported_tools: [],
   input_modalities: ['text'],
@@ -170,6 +170,8 @@ export function buildCatalogModel({
     explicitMetadata,
   );
 
+  normalizeContextLimits(merged);
+
   merged.slug = publicId;
   merged.display_name = String(
     displayName ||
@@ -191,11 +193,52 @@ export function buildCatalogModel({
 export function extractDiscoveryMetadata(source) {
   if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
   const result = {};
+  // OpenAI-compatible catalogs may put native model fields inside metadata
+  // rather than at the top level. Explicit top-level fields take precedence.
+  for (const nested of [source.metadata, source.model_metadata]) {
+    if (!isPlainObject(nested)) continue;
+    for (const [key, value] of Object.entries(nested)) {
+      if (DISCOVERY_INTERNAL_FIELDS.has(key)) continue;
+      result[key] = cloneValue(value);
+    }
+  }
   for (const [key, value] of Object.entries(source)) {
-    if (DISCOVERY_INTERNAL_FIELDS.has(key)) continue;
+    if (DISCOVERY_INTERNAL_FIELDS.has(key) || key === 'metadata' || key === 'model_metadata') continue;
     result[key] = cloneValue(value);
   }
+  // Common third-party /models spelling. Do not mistake output-token or
+  // input-token limits for the total model context window.
+  if (result.context_window === undefined && result.context_length !== undefined) {
+    result.context_window = result.context_length;
+  }
+  delete result.context_length;
   return result;
+}
+
+function normalizeContextLimits(model) {
+  for (const field of ['context_window', 'max_context_window', 'auto_compact_token_limit']) {
+    if (model[field] === undefined || model[field] === null) {
+      delete model[field];
+      continue;
+    }
+    const raw = model[field];
+    const value = typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw) : raw;
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      delete model[field];
+    } else {
+      model[field] = value;
+    }
+  }
+  // max_context_window is the upper bound for overrides, not a generic
+  // default. If an upstream entry is internally inconsistent, omit that
+  // bound instead of imposing a smaller window than the real context.
+  if (model.context_window && model.max_context_window && model.max_context_window < model.context_window) {
+    delete model.max_context_window;
+  }
+  const percent = model.effective_context_window_percent;
+  if (!Number.isInteger(percent) || percent < 1 || percent > 100) {
+    model.effective_context_window_percent = 95;
+  }
 }
 
 function normalizeMetadataObject(value, modelId) {

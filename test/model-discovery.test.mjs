@@ -3,11 +3,48 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import {
   createModelDiscovery,
+  createPassthroughModelDiscovery,
   normalizeDiscoveredModels,
   requestProviderModels,
 } from '../model-discovery.mjs';
 
 const silentLogger = { info() {}, error() {}, warn() {} };
+
+test('ChatGPT 无登录信息不请求上游，有凭据时保留实时目录上下文数据', async () => {
+  let calls = 0;
+  const discovery = createPassthroughModelDiscovery({
+    provider: { id: 'chatgpt', model_prefix: 'chatgpt/', auth_mode: 'openai_passthrough' },
+    resolveProxy: async () => ({ url: '', mode: 'direct' }),
+    fetchModels: async (_provider, _proxy, context) => {
+      calls += 1;
+      assert.equal(context.authorization, 'Bearer test-token');
+      return { models: [{ slug: 'gpt-test', context_window: 300000, max_context_window: 400000 }] };
+    },
+    logger: silentLogger,
+  });
+  assert.deepEqual(await discovery.getModels({}), []);
+  assert.equal(calls, 0);
+  const models = await discovery.getModels({ authorization: 'Bearer test-token' });
+  assert.equal(calls, 1);
+  assert.equal(models[0].context_window, 300000);
+  assert.equal(models[0].max_context_window, 400000);
+});
+
+test('ChatGPT 实时目录失败只记录安全状态码，不记录错误中的凭据', async () => {
+  const warnings = [];
+  const discovery = createPassthroughModelDiscovery({
+    provider: { id: 'chatgpt', model_prefix: 'chatgpt/', auth_mode: 'openai_passthrough' },
+    resolveProxy: async () => ({ url: '', mode: 'direct' }),
+    fetchModels: async () => {
+      throw Object.assign(new Error('Authorization: Bearer secret-material'), { statusCode: 403 });
+    },
+    logger: { warn: (message) => warnings.push(message) },
+  });
+  assert.deepEqual(await discovery.getModels({ authorization: 'Bearer test-token' }), []);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /HTTP 403/);
+  assert.doesNotMatch(warnings[0], /secret-material/);
+});
 
 function provider(overrides = {}) {
   return {

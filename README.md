@@ -112,3 +112,11 @@ CMP 的对话协议仍为原生 Responses API，不提供 Chat Completions 转�
 Node.js 24 可运行：在仓库根目录使用 `node --test --test-isolation=none test/*.test.mjs`。Windows 受限沙箱中将 `TEMP` 和 `TMP` 指向仓库内可写位置。更改模型目录和转发逻辑时应同时增加模拟上游测试。
 
 提交和同步使用 `origin/master`，两台电脑应通过 Git 快进至同一提交。以项目 `AGENTS.md` 为工作规则。
+
+## 自动发现的上下文元数据
+
+- CMP 的 `/v1/models` 优先透传上游 `context_window`、`max_context_window`、`auto_compact_token_limit` 及其他 Codex 原生能力字段；同时支持发现响应的嵌套 `metadata`、`model_metadata` 和通用的 `context_length`。
+- 不把 `max_input_tokens` 或输出 token 上限当作模型的总上下文窗口；没有可信窗口数据时，不再把所有模型写死成 128k，相关字段保持缺省。
+- `max_context_window` 指允许配置覆盖的最大值，不等于 `context_window`。缺失时不会凭空赋值，非法或互相冲突的数值会被过滤。
+- 不带 ChatGPT 登录凭据时，仍返回配置的 GPT 固定模型，但无法从官方获得实时容量信息；带有效 OAuth/账号标识时尝试官方 `/models`，失败仅安全记录 HTTP 状态码或网络代码。
+- Codex App Server 与运行中会话有独立模型目录和上下文缓存。修改代码后须由用户安排 CMP 重新加载，并在 Codex 新会话验证；本项目不会自动重启服务。
