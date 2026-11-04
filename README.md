@@ -120,3 +120,10 @@ Node.js 24 可运行：在仓库根目录使用 `node --test --test-isolation=no
 - `max_context_window` 指允许配置覆盖的最大值，不等于 `context_window`。缺失时不会凭空赋值，非法或互相冲突的数值会被过滤。
 - 不带 ChatGPT 登录凭据时，仍返回配置的 GPT 固定模型，但无法从官方获得实时容量信息；带有效 OAuth/账号标识时尝试官方 `/models`，失败仅安全记录 HTTP 状态码或网络代码。
 - Codex App Server 与运行中会话有独立模型目录和上下文缓存。修改代码后须由用户安排 CMP 重新加载，并在 Codex 新会话验证；本项目不会自动重启服务。
+
+## Codex 内置 Provider 的双模式切换
+
+- 官方直连和 CMP 模式均使用 Codex 内置的 `model_provider = "openai"`（区分大小写），不建立自定义同名 Provider 表。官方直连不设置 `openai_base_url`，自动采用 Codex 自己的官方登录、模型接口及默认 Responses WebSocket 能力。
+- CMP 模式通过顶层 `openai_base_url` 指向本地 CMP，继续使用同一个原生 Provider。内置 Provider 不接受自定义 `http_headers` 覆盖，因此当 CMP 启用 `PROXY_ACCESS_TOKEN` 时，切换器把现有访问令牌编码到本地 `/_cmp-auth/<令牌>/v1` URL 前缀；CMP 验证令牌后移除前缀，绝不向上游转发或在日志中输出它。请勿公开带令牌的完整本地 URL。
+- CMP 当前没有 Responses WebSocket 转发：对 Upgrade 明确返回 HTTP 426，Codex 可回退到 HTTP Responses。官方直连不经过 CMP，可以独立测试 WS。不要把“同一个原生 Provider”误认为“CMP 已经实现 WS”。
+- `codex-switch/install.py` 刷新管理中的模板和切换脚本，但不自动切换正在使用的 Codex；`switch_config.ps1` 只更新模型、认证和地址相关配置，保留插件、MCP 等其他设置，并在改写前备份原 `config.toml`。

@@ -295,23 +295,29 @@ export function createProxyServer({
   const directModels = configuredDirectModels || parseDirectModels(env.DIRECT_MODELS, knownModels);
   proxyForModel = createUpstreamProxyResolver({ config, env, directModels, systemProxyResolver });
   const requireToken = accessToken.length > 0;
+  // Codex's built-in `openai` provider supports openai_base_url but ignores
+  // custom HTTP headers. Keep the existing local access control by accepting
+  // a token in a private URL prefix (never forwarded upstream or logged).
+  const urlAccessToken = requireToken ? Buffer.from(accessToken, 'utf8').toString('base64url') : '';
   const historyMonitor = configuredHistoryMonitor || createHistoryMonitor({ env, logger });
 
-  function isAuthorized(req) {
+  function isAuthorized(req, hasUrlToken = false) {
     if (!requireToken) return true;
-    return safeEqual(getHeader(req, 'x-proxy-access-token'), accessToken);
+    return hasUrlToken || safeEqual(getHeader(req, 'x-proxy-access-token'), accessToken);
   }
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
-    const pathname = url.pathname;
+    const accessPath = /^\/_cmp-auth\/([^/]+)(\/v1\/(?:models|responses(?:\/compact)?|images\/generations|images\/edits|alpha\/search|memories\/trace_summarize|realtime\/calls))$/.exec(url.pathname);
+    const hasUrlToken = Boolean(accessPath && urlAccessToken && safeEqual(accessPath[1], urlAccessToken));
+    const pathname = hasUrlToken ? accessPath[2] : url.pathname;
 
     if (req.method === 'GET' && pathname === '/healthz') {
       sendJson(res, 200, { status: 'ok' });
       return;
     }
 
-    if (!isAuthorized(req)) {
+    if (!isAuthorized(req, hasUrlToken)) {
       sendJson(res, 401, {
         error: { type: 'authentication_error', message: '未授权：缺少或错误的访问令牌' },
       });
@@ -456,6 +462,11 @@ export function createProxyServer({
     }
 
     sendJson(res, 404, { error: { type: 'not_found', message: '未找到该路径' } });
+  });
+  // Codex's built-in OpenAI provider enables Responses WebSockets. CMP does
+  // not proxy WS: 426 lets the client explicitly fall back to HTTP Responses.
+  server.on('upgrade', (_req, socket) => {
+    socket.end('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
   });
   server.providerRegistry = registry;
   server.directModels = directModels;

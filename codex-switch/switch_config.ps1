@@ -10,7 +10,8 @@ $managedTopKeys = @(
     'model_reasoning_effort',
     'preferred_auth_method',
     'forced_login_method',
-    'model_catalog_json'
+    'model_catalog_json',
+    'openai_base_url'
 )
 function Get-NewLine([string]$Text) {
     if ($Text.Contains("`r`n")) { return "`r`n" }
@@ -58,12 +59,6 @@ function Convert-TomlString([string]$RawValue, [string]$Key) {
     throw ('Field ' + $Key + ' must be a TOML string')
 }
 
-function Normalize-NewLines([string]$Text, [string]$NewLine) {
-    $normalized = $Text -replace "`r`n", "`n"
-    $normalized = $normalized -replace "`r", "`n"
-    return ($normalized -replace "`n", $NewLine)
-}
-
 if ([string]::IsNullOrWhiteSpace($TargetPath)) { throw 'TargetPath is required' }
 
 $targetPath = [IO.Path]::GetFullPath($TargetPath)
@@ -82,22 +77,10 @@ foreach ($requiredKey in @('model_provider', 'model', 'model_reasoning_effort'))
 }
 
 $providerId = Convert-TomlString $targetTop['model_provider'] 'model_provider'
-if ($providerId -notmatch '^[A-Za-z0-9_-]+$') {
-    throw ('Provider id must be a TOML bare key: ' + $providerId)
+if ($providerId -cne 'openai') { throw 'Both Codex switch profiles must use the built-in openai provider' }
+if ($targetText -match '(?m)^[ \t]*\[model_providers\.') {
+    throw 'Built-in openai profiles must not override provider tables'
 }
-$providerTableName = 'model_providers.' + $providerId
-$providerHeaderPattern = '(?m)^[ \t]*\[' + [regex]::Escape($providerTableName) + '\][^\r\n]*'
-
-$targetProviderSpan = Get-TableSpan $targetText $providerTableName
-if ($null -eq $targetProviderSpan) { throw ('Target config missing [' + $providerTableName + ']') }
-if ([regex]::Matches($targetText, $providerHeaderPattern).Count -ne 1) {
-    throw ('Target config has duplicate [' + $providerTableName + '] sections')
-}
-$targetProviderBlock = $targetText.Substring($targetProviderSpan.Start, $targetProviderSpan.Length)
-if (-not [regex]::IsMatch($targetProviderBlock, '(?m)^[ \t]*wire_api[ \t]*=')) {
-    throw ('Target config [' + $providerTableName + '] is missing wire_api')
-}
-$targetProviderBlock = Normalize-NewLines $targetProviderBlock $newLine
 
 # Rewrite only managed top-level keys. Preserve all other settings and sections.
 $firstTable = [regex]::Match($currentText, '(?m)^[ \t]*\[[^\r\n]+\]')
@@ -133,20 +116,18 @@ $newTopText = [string]::Join($newLine, $rewrittenTopLines)
 if (-not $newTopText.EndsWith($newLine)) { $newTopText += $newLine }
 $newText = $newTopText + $currentRestText
 
-# Replace the entire active provider section so auth and proxy fields cannot leak between profiles.
-$currentProviderMatches = [regex]::Matches($newText, $providerHeaderPattern)
-if ($currentProviderMatches.Count -gt 1) { throw ('Current config has duplicate [' + $providerTableName + '] sections') }
-$currentProviderSpan = Get-TableSpan $newText $providerTableName
-if ($null -eq $currentProviderSpan) {
-    $firstTableInNew = [regex]::Match($newText, '(?m)^[ \t]*\[[^\r\n]+\]')
-    if ($firstTableInNew.Success) {
-        $newText = $newText.Substring(0, $firstTableInNew.Index) + $targetProviderBlock + $newLine + $newText.Substring($firstTableInNew.Index)
-    } else {
-        if (-not $newText.EndsWith($newLine)) { $newText += $newLine }
-        $newText += $targetProviderBlock
+# The lowercase `openai` provider is built into Codex. Remove any customized
+# case variant and any local override table for this provider, preserving all
+# unrelated provider tables, plugins and MCP settings.
+$nativeTables = [regex]::Matches($newText, '(?m)^[ \t]*\[model_providers\.(?<id>[A-Za-z0-9_-]+)\]')
+$nativeTableNames = @($nativeTables | ForEach-Object { $_.Groups['id'].Value } |
+    Where-Object { $_.ToLowerInvariant() -ceq 'openai' } |
+    Select-Object -Unique)
+foreach ($id in $nativeTableNames) {
+    $section = Get-TableSpan $newText ('model_providers.' + $id)
+    if ($null -ne $section) {
+        $newText = $newText.Substring(0, $section.Start) + $newText.Substring($section.End)
     }
-} else {
-    $newText = $newText.Substring(0, $currentProviderSpan.Start) + $targetProviderBlock + $newText.Substring($currentProviderSpan.End)
 }
 
 # Final structural checks before changing config.toml.
@@ -154,10 +135,8 @@ $finalTop = Get-TopAssignments $newText $managedTopKeys
 foreach ($key in $targetTop.Keys) {
     if (-not $finalTop.ContainsKey($key)) { throw ('Switch result missing key: ' + $key) }
 }
-$finalProviderSpan = Get-TableSpan $newText $providerTableName
-if ($null -eq $finalProviderSpan) { throw ('Switch result missing [' + $providerTableName + ']') }
-if ([regex]::Matches($newText, $providerHeaderPattern).Count -ne 1) {
-    throw ('Switch result has duplicate [' + $providerTableName + '] sections')
+if ([regex]::IsMatch($newText, '(?im)^[ \t]*\[model_providers\.openai\]')) {
+    throw 'Built-in openai provider still has a local override table'
 }
 
 if ($newText -ceq $currentText) {

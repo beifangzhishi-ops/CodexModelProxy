@@ -35,10 +35,8 @@ class SwitchInstallerTests(unittest.TestCase):
                 "* kimi/kimi-selected\n  ds/deepseek-flash\n", encoding="utf-8",
             )
             active = (
-                'model_provider = "OpenAI"\nmodel = "gpt-current"\n'
+                'model_provider = "openai"\nmodel = "gpt-current"\n'
                 'model_reasoning_effort = "high"\nforced_login_method = "chatgpt"\n'
-                '\n[model_providers.OpenAI]\nname = "OpenAI"\n'
-                'wire_api = "responses"\nrequires_openai_auth = true\n'
             )
             (home / "config.toml").write_text(active, encoding="utf-8")
             (home / "switch_config.ps1").write_text("unchanged", encoding="utf-8")
@@ -52,12 +50,15 @@ class SwitchInstallerTests(unittest.TestCase):
             cmp_profile = tomllib.loads((home / "config_cmp.toml").read_text(encoding="utf-8"))
             self.assertEqual(official["model"], "gpt-current")
             self.assertEqual(official["model_reasoning_effort"], "high")
-            self.assertNotIn("base_url", official["model_providers"]["OpenAI"])
+            self.assertEqual(official["model_provider"], "openai")
+            self.assertNotIn("openai_base_url", official)
+            self.assertNotIn("model_providers", official)
             self.assertEqual(cmp_profile["model"], "kimi/kimi-selected")
-            self.assertEqual(cmp_profile["model_providers"]["OpenAI"]["base_url"],
-                             "http://127.0.0.1:9777/v1")
-            self.assertEqual(cmp_profile["model_providers"]["OpenAI"]["http_headers"],
-                             {"X-Proxy-Access-Token": "local-test-token"})
+            self.assertEqual(cmp_profile["model_provider"], "openai")
+            expected_secret = base64.urlsafe_b64encode(b"local-test-token").decode('ascii').rstrip('=')
+            self.assertEqual(cmp_profile["openai_base_url"],
+                             f"http://127.0.0.1:9777/_cmp-auth/{expected_secret}/v1")
+            self.assertNotIn("model_providers", cmp_profile)
             self.assertEqual({p.name for p in home.glob("*.cmd")},
                              {"官方直连.cmd", "CMP模式.cmd"})
             retired = list((home / "backup-switch").glob("retired-*"))
@@ -65,11 +66,11 @@ class SwitchInstallerTests(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in retired[0].iterdir()),
                              ["config_older.cmd", "config_older.toml", "switch_config_older.ps1"])
 
-            # Reinstalling must not override a user-edited profile.
+            # Reinstalling refreshes the managed switch templates.
             (home / "config_cmp.toml").write_text('model = "custom"\n', encoding="utf-8")
             MODULE.install(home, project)
-            self.assertEqual((home / "config_cmp.toml").read_text(encoding="utf-8"),
-                             'model = "custom"\n')
+            self.assertEqual(tomllib.loads((home / "config_cmp.toml").read_text(encoding="utf-8")),
+                             cmp_profile)
 
             with mock.patch.object(MODULE, "write_shortcuts") as create_shortcuts:
                 MODULE.install(home, project, create_shortcuts=True)
@@ -106,10 +107,10 @@ class SwitchInstallerTests(unittest.TestCase):
             (project / "AGENTS.md").write_text("CMP rules", encoding="utf-8")
             (project / "proxy-local.env").write_text("PORT=8787\n", encoding="utf-8")
             original = (
-                'model_provider = "OpenAI"\nmodel = "gpt-current"\n'
+                'model_provider = "openai"\nmodel = "gpt-current"\n'
                 'model_reasoning_effort = "medium"\nforced_login_method = "chatgpt"\n'
-                '\n[model_providers.OpenAI]\nname = "OpenAI"\n'
-                'wire_api = "responses"\nrequires_openai_auth = true\n'
+                '\n[model_providers.deepseek]\nname = "DeepSeek"\n'
+                'base_url = "https://api.deepseek.com/v1"\nwire_api = "responses"\n'
                 '\n[mcp_servers.fixture]\ncommand = "python"\nargs = []\n'
             )
             (home / "config.toml").write_text(original, encoding="utf-8")
@@ -131,15 +132,46 @@ class SwitchInstallerTests(unittest.TestCase):
 
             changed = activate("config_cmp.toml")
             self.assertEqual(changed["model"], "ds/deepseek-flash")
-            self.assertEqual(changed["model_providers"]["OpenAI"]["base_url"],
-                             "http://127.0.0.1:8787/v1")
+            self.assertEqual(changed["model_provider"], "openai")
+            self.assertEqual(changed["openai_base_url"], "http://127.0.0.1:8787/v1")
             self.assertEqual(changed["mcp_servers"]["fixture"]["command"], "python")
+            self.assertIn("deepseek", changed["model_providers"])
 
             restored = activate("config_official.toml")
             self.assertEqual(restored["model"], "gpt-current")
-            self.assertNotIn("base_url", restored["model_providers"]["OpenAI"])
+            self.assertEqual(restored["model_provider"], "openai")
+            self.assertNotIn("openai_base_url", restored)
             self.assertEqual(restored["mcp_servers"]["fixture"]["command"], "python")
+            self.assertIn("deepseek", restored["model_providers"])
             self.assertGreaterEqual(len(list((home / "backup-switch").glob("config.toml.*.bak"))), 2)
+
+    @unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "Requires Windows PowerShell")
+    def test_native_provider_switch_removes_case_variant_table_and_proxy_url(self):
+        with tempfile.TemporaryDirectory(dir=FILE.parent.parent) as directory:
+            root = Path(directory)
+            home = root / ".codex"
+            project = root / "cmp"
+            home.mkdir()
+            project.mkdir()
+            (project / "AGENTS.md").write_text("CMP rules", encoding="utf-8")
+            (project / "models.txt").write_text("* ds/deepseek-flash\n", encoding="utf-8")
+            (project / "proxy-local.env").write_text("PORT=8787\n", encoding="utf-8")
+            old_case = "openai".title()
+            (home / "config.toml").write_text(
+                f'model_provider = "{old_case}"\nmodel = "gpt-6.1-sol"\n'
+                f'\n[model_providers.{old_case}]\nname = "CMP"\nwire_api = "responses"\n'
+                '\n[plugins.fixture]\nenabled = true\n', encoding="utf-8",
+            )
+            MODULE.install(home, project)
+            command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                       str(home / "switch_config.ps1"), "-TargetPath", str(home / "config_official.toml")]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=35)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            current = tomllib.loads((home / "config.toml").read_text(encoding="utf-8-sig"))
+            self.assertEqual(current["model_provider"], "openai")
+            self.assertNotIn("model_providers", current)
+            self.assertNotIn("openai_base_url", current)
+            self.assertEqual(current["plugins"]["fixture"]["enabled"], True)
 
 
 if __name__ == "__main__":

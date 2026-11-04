@@ -32,10 +32,13 @@ def active_official_model(home: Path) -> tuple[str, str]:
         if not file.is_file():
             continue
         config = load_toml(file)
-        provider = config.get("model_providers", {}).get("OpenAI", {})
+        provider_id = config.get("model_provider", "")
+        provider = config.get("model_providers", {}).get(provider_id, {})
         model = config.get("model", "")
         if (
-            config.get("model_provider") == "OpenAI"
+            isinstance(provider_id, str)
+            and provider_id.casefold() == "openai"
+            and not config.get("openai_base_url")
             and not provider.get("base_url")
             and isinstance(model, str)
             and model.startswith("gpt-")
@@ -53,6 +56,25 @@ def first_selected_model(cmp_root: Path) -> str:
             if match:
                 return match.group(1)
     return "ds/deepseek-flash"
+
+
+def active_cmp_model(home: Path, cmp_url: str, cmp_root: Path) -> str:
+    for file in (home / 'config.toml', home / 'config_cmp.toml'):
+        if not file.is_file():
+            continue
+        try:
+            config = load_toml(file)
+        except (ValueError, OSError):
+            continue
+        provider_id = config.get('model_provider', '')
+        native_url = config.get('openai_base_url', '')
+        custom_url = config.get('model_providers', {}).get(provider_id, {}).get('base_url', '')
+        base = native_url or custom_url
+        model = config.get('model')
+        if isinstance(base, str) and base.startswith(cmp_url.removesuffix('/v1') + '/'):
+            if isinstance(model, str) and model.strip():
+                return model
+    return first_selected_model(cmp_root)
 
 
 def get_local_proxy_settings(home: Path, cmp_root: Path) -> tuple[str, dict]:
@@ -94,21 +116,23 @@ def get_local_proxy_settings(home: Path, cmp_root: Path) -> tuple[str, dict]:
 
 def render_profile(model: str, effort: str, url: str | None, headers: dict) -> str:
     lines = [
-        f"model_provider = {quote('OpenAI')}",
+        'model_provider = "openai"',
         f"model = {quote(model)}",
         f"model_reasoning_effort = {quote(effort)}",
         'forced_login_method = "chatgpt"',
-        "",
-        "[model_providers.OpenAI]",
-        f"name = {quote('CMP' if url else 'OpenAI')}",
-        'wire_api = "responses"',
-        "requires_openai_auth = true",
     ]
     if url:
-        lines.append(f"base_url = {quote(url)}")
-    if headers:
-        values = ", ".join(f"{quote(k)} = {quote(v)}" for k, v in headers.items())
-        lines.append(f"http_headers = {{ {values} }}")
+        unknown_headers = [key for key in headers if key.casefold() != 'x-proxy-access-token']
+        if unknown_headers:
+            raise ValueError('Built-in openai provider cannot forward custom CMP headers')
+        access_token = next((value for key, value in headers.items()
+                             if key.casefold() == 'x-proxy-access-token'), '')
+        if access_token:
+            # Built-in openai ignores custom http_headers. Carry the existing
+            # local CMP access secret in an opaque path segment instead.
+            credential = base64.urlsafe_b64encode(access_token.encode('utf-8')).decode('ascii').rstrip('=')
+            url = url.removesuffix('/v1') + '/_cmp-auth/' + credential + '/v1'
+        lines.append(f"openai_base_url = {quote(url)}")
     return "\n".join(lines) + "\n"
 
 
@@ -177,19 +201,21 @@ def install(home: Path, cmp_root: Path, *, create_shortcuts: bool = False) -> No
     if not (cmp_root / "AGENTS.md").is_file():
         raise FileNotFoundError("CMP project directory is invalid")
     switch_script = home / "switch_config.ps1"
-    if not switch_script.is_file():
-        template = Path(__file__).with_name("switch_config.ps1")
-        if not template.is_file():
-            raise FileNotFoundError("Missing switch_config.ps1")
-        shutil.copyfile(template, switch_script)
+    template = Path(__file__).with_name("switch_config.ps1")
+    if not template.is_file():
+        raise FileNotFoundError("Missing switch_config.ps1")
 
     model, effort = active_official_model(home)
     url, headers = get_local_proxy_settings(home, cmp_root)
-    cmp_model = first_selected_model(cmp_root)
+    cmp_model = active_cmp_model(home, url, cmp_root)
     official = render_profile(model, effort, None, {})
     cmp_profile = render_profile(cmp_model, "medium", url, headers)
     for data in (official, cmp_profile):
         tomllib.loads(data)
+
+    switch_code = template.read_text(encoding="utf-8-sig")
+    if not switch_script.is_file() or switch_script.read_text(encoding="utf-8-sig") != switch_code:
+        atomic_write(switch_script, switch_code)
 
     # Generate first; retire only files that are no longer used by the switches.
     for name, data in [
@@ -199,7 +225,7 @@ def install(home: Path, cmp_root: Path, *, create_shortcuts: bool = False) -> No
         ("CMP模式.cmd", render_switch("config_cmp.toml")),
     ]:
         target = home / name
-        if not target.is_file():
+        if not target.is_file() or target.read_text(encoding="utf-8-sig") != data:
             atomic_write(target, data)
 
     retired = [
