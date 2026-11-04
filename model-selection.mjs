@@ -9,7 +9,7 @@ const HEADER = [
   '# 在模型名前添加 * 表示显示在 Codex 下拉列表；去掉 * 表示隐藏。',
   '# 模型 ID 由上游自动发现并追加，可直接复制模型 ID；不要改写 ID 本身。',
   '# 此文件仅控制下拉列表；隐藏的模型仍能按完整 ID 调用。',
-  '# 上游暂时不可用时不删除已有条目；只有实际发现的模型才会展示。',
+  '# 上游明确拒绝访问，或成功模型目录不再包含的条目，将自动删除；临时网络故障不删。',
   '',
 ].join('\n');
 
@@ -40,9 +40,9 @@ function initialFavorites(ids) {
   return new Set(choices);
 }
 
-export function syncModelSelection(filePath, discoveredModels, logger = console) {
+export function syncModelSelection(filePath, discoveredModels, logger = console, isConfirmedInvalid = () => false) {
   const ids = [...new Set(discoveredModels.map((model) => model?.id)
-    .filter((id) => validId(id) && !isPassthroughId(id)))];
+    .filter((id) => validId(id) && !isPassthroughId(id) && !isConfirmedInvalid(id)))];
   const discovered = new Set(ids);
   let text;
   try {
@@ -62,12 +62,14 @@ export function syncModelSelection(filePath, discoveredModels, logger = console)
   }
 
   // This file controls only third-party favorites. Purge ChatGPT passthrough
-  // rows left by earlier catalog versions; keep other entries, comments and
-  // stars unchanged, including CPA models whose names happen to contain gpt.
+  // rows left by earlier catalog versions and models confirmed invalid by a
+  // rejected provider or a successful upstream catalog. Unknown and
+  // temporarily unreachable models are retained without changing their stars.
+  // CPA models whose names contain "gpt" are not ChatGPT passthrough.
   const newline = text.includes('\r\n') ? '\r\n' : '\n';
   const cleaned = text.split(/\r?\n/).filter((line) => {
     const entry = parseEntry(line);
-    return !entry || !isPassthroughId(entry.id);
+    return !entry || (!isPassthroughId(entry.id) && !isConfirmedInvalid(entry.id));
   }).join(newline);
   const existing = new Set();
   const selected = new Set();

@@ -182,7 +182,7 @@ test('ChatGPT passthrough stays selectable without stars or login; only third-pa
   });
 });
 
-test('auth-rejected third-party provider disappears from catalog while GPT and healthy favorites remain', async () => {
+test('auth-rejected third-party provider is removed from favorites and later returns unstarred', async () => {
   await withSelectionFile(async (file) => {
     const original = '* oc/alpha\n* oc-alias\n* ds/selected\n';
     fs.writeFileSync(file, original);
@@ -242,13 +242,87 @@ test('auth-rejected third-party provider disappears from catalog while GPT and h
     await new Promise((resolve) => setTimeout(resolve, 5));
     assert.deepEqual(await getIds(), ['gpt-6.1-sol', 'ds/selected']);
     assert.equal(registry.isCatalogProviderAvailable('opencode'), false);
-    assert.equal(fs.readFileSync(file, 'utf8'), original);
+    assert.equal(fs.readFileSync(file, 'utf8'), '* ds/selected\n');
     await new Promise((resolve) => setTimeout(resolve, 40));
     const recovered = await getIds();
-    assert.ok(recovered.includes('oc-alias'));
-    assert.ok(recovered.includes('oc/alpha'));
+    assert.deepEqual(recovered, ['gpt-6.1-sol', 'ds/selected']);
     assert.equal(registry.isCatalogProviderAvailable('opencode'), true);
-    assert.equal(fs.readFileSync(file, 'utf8'), original);
+    assert.match(fs.readFileSync(file, 'utf8'), /^\* ds\/selected\n(?:  oc-alias\n|  oc\/alpha\n){2}$/);
     assert.equal(ocAttempts, 3);
+  });
+});
+
+test('successful upstream catalog removes models no longer listed from the favorites file', async () => {
+  await withSelectionFile(async (file) => {
+    fs.writeFileSync(file, '* ds/alpha\n* ds/retired\n');
+    let attempts = 0;
+    const registry = createProviderRegistry({
+      config: { providers: { ds: {
+        enabled: true, base_url: 'https://ds.example/v1',
+        api_key: 'fixture-key', auth_mode: 'api_key', protocol: 'responses',
+        model_prefix: 'ds/', discover_models: true,
+        compat_profile: 'passthrough', cache_ttl_ms: 1,
+      } } },
+      localConfig: { providers: {} },
+      logger,
+      discoveryFetchModels: async () => {
+        attempts += 1;
+        return { data: attempts === 1
+          ? [{ id: 'alpha' }, { id: 'retired' }]
+          : [{ id: 'alpha' }, { id: 'new' }] };
+      },
+    });
+    const getModels = async () => {
+      let payload;
+      await sendModelList({}, registry, (_, status, result) => {
+        assert.equal(status, 200);
+        payload = result;
+      }, {}, file);
+      return payload.data.map((model) => model.id);
+    };
+    assert.deepEqual(await getModels(), ['ds/alpha', 'ds/retired']);
+    assert.equal(fs.readFileSync(file, 'utf8'), '* ds/alpha\n* ds/retired\n');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(await getModels(), ['ds/alpha']);
+    assert.equal(fs.readFileSync(file, 'utf8'), '* ds/alpha\n  ds/new\n');
+  });
+});
+
+test('temporary provider failure preserves stars and stale favorites rows', async () => {
+  await withSelectionFile(async (file) => {
+    const original = '* oc/alpha\n* oc/previously-available\n';
+    fs.writeFileSync(file, original);
+    let attempts = 0;
+    const registry = createProviderRegistry({
+      config: { providers: { opencode: {
+        enabled: true, base_url: 'https://oc.example/v1',
+        api_key: 'fixture-key', auth_mode: 'api_key', protocol: 'responses',
+        model_prefix: 'oc/', discover_models: true,
+        compat_profile: 'passthrough', cache_ttl_ms: 1,
+        failure_cooldown_ms: 35,
+      } } },
+      localConfig: { providers: {} },
+      logger,
+      discoveryFetchModels: async () => {
+        attempts += 1;
+        if (attempts === 2) {
+          throw Object.assign(new Error('HTTP 429'), { statusCode: 429 });
+        }
+        return { data: [{ id: 'alpha' }, { id: 'previously-available' }] };
+      },
+    });
+    const getModels = async () => {
+      let payload;
+      await sendModelList({}, registry, (_, status, result) => {
+        assert.equal(status, 200);
+        payload = result;
+      }, {}, file);
+      return payload.data.map((model) => model.id);
+    };
+    assert.deepEqual(await getModels(), ['oc/alpha', 'oc/previously-available']);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(await getModels(), ['oc/alpha', 'oc/previously-available']);
+    assert.equal(fs.readFileSync(file, 'utf8'), original);
+    assert.equal(attempts, 2);
   });
 });

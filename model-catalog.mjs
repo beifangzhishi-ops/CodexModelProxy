@@ -7,6 +7,18 @@ import { syncModelSelection } from './model-selection.mjs';
 
 export async function sendModelList(res, registry, sendJson, context = {}, selectionFile = '') {
   const dynamicModels = await registry.discoverAll(context);
+  const confirmedAvailability = registry.getConfirmedCatalogAvailability();
+  const isConfirmedInvalid = (slug) => {
+    const selection = resolveModelSelection(slug, registry);
+    if (!selection.ok) return false;
+    const state = confirmedAvailability.get(selection.provider_id);
+    if (!state) return false;
+    if (state.rejected) return true;
+    const provider = registry.getProvider(selection.provider_id);
+    const upstreamModel = selection.route?.upstream_model;
+    return Boolean(provider && upstreamModel)
+      && !state.discoveredIds.has(`${provider.model_prefix}${upstreamModel}`);
+  };
   const passthrough = registry.getProvider('chatgpt');
   const hasPassthrough = passthrough?.enabled === true && passthrough.auth_mode === 'openai_passthrough';
   const fixedPassthrough = new Map();
@@ -47,7 +59,8 @@ export async function sendModelList(res, registry, sendJson, context = {}, selec
   const publicSlugs = visiblePublicSlugs(registry).filter((slug) => {
     const providerId = resolveModelSelection(slug, registry).provider_id;
     return (!hasPassthrough || providerId !== passthrough.id)
-      && registry.isCatalogProviderAvailable(providerId);
+      && registry.isCatalogProviderAvailable(providerId)
+      && !isConfirmedInvalid(slug);
   });
   const publicCatalog = publicSlugs.map((slug, index) => {
     const selection = resolveModelSelection(slug, registry);
@@ -84,6 +97,7 @@ export async function sendModelList(res, registry, sendJson, context = {}, selec
       .filter((slug) => !publicSlugs.includes(slug))
       .filter((slug) => !hasPassthrough || !slug.startsWith(passthrough.model_prefix))
       .filter((slug) => registry.isCatalogProviderAvailable(resolveModelSelection(slug, registry).provider_id))
+      .filter((slug) => !isConfirmedInvalid(slug))
     : [];
   const canonicalCatalog = canonicalIds.map((slug, index) => {
     const selection = resolveModelSelection(slug, registry);
@@ -106,7 +120,7 @@ export async function sendModelList(res, registry, sendJson, context = {}, selec
   let selected = null;
   if (selectionFile) {
     try {
-      selected = syncModelSelection(selectionFile, allData, registry.logger);
+      selected = syncModelSelection(selectionFile, allData, registry.logger, isConfirmedInvalid);
     } catch (error) {
       // Picker selection must never prevent a working proxy from serving models.
       registry.logger?.warn?.('[codex-proxy] Cannot update model selection file: ' + error.message);

@@ -400,6 +400,20 @@ export function createProviderRegistry({
     isCatalogProviderAvailable(providerId) {
       return discoveries.get(providerId)?.getState().authUnavailable !== true;
     },
+    getConfirmedCatalogAvailability() {
+      const states = new Map();
+      for (const [providerId, discovery] of discoveries) {
+        const provider = providers.get(providerId);
+        if (provider?.auth_mode === 'openai_passthrough') continue;
+        const state = discovery.getState();
+        if (!state.authUnavailable && !state.catalogVerified) continue;
+        states.set(providerId, {
+          rejected: state.authUnavailable,
+          discoveredIds: new Set(state.discoveredIds),
+        });
+      }
+      return states;
+    },
     async discoverAll(context = {}) {
       const lists = await Promise.all(
         [...discoveries.entries()].map(async ([providerId, discovery]) => ({

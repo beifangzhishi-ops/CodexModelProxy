@@ -75,6 +75,8 @@ export function createModelDiscovery({
         lastAttemptAt,
         lastFailureAt,
         authUnavailable,
+        catalogVerified: lastSuccessAt > 0 && lastFailureAt === 0,
+        discoveredIds: cachedModels.map((model) => model.id),
         refreshing: Boolean(refreshPromise),
       };
     },
