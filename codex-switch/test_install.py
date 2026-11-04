@@ -166,6 +166,11 @@ class SwitchInstallerTests(unittest.TestCase):
             self.assertEqual(changed["openai_base_url"], "http://127.0.0.1:8787/v1")
             self.assertEqual(changed["mcp_servers"]["fixture"]["command"], "python")
             self.assertIn("deepseek", changed["model_providers"])
+            legacy = changed["model_providers"]["OpenAI"]
+            self.assertEqual(legacy["base_url"], "https://chatgpt.com/backend-api/codex")
+            self.assertEqual(legacy["wire_api"], "responses")
+            self.assertIs(legacy["requires_openai_auth"], True)
+            self.assertIs(legacy["supports_websockets"], True)
 
             restored = activate("config_official.toml")
             self.assertEqual(restored["model"], "gpt-current")
@@ -173,10 +178,11 @@ class SwitchInstallerTests(unittest.TestCase):
             self.assertNotIn("openai_base_url", restored)
             self.assertEqual(restored["mcp_servers"]["fixture"]["command"], "python")
             self.assertIn("deepseek", restored["model_providers"])
+            self.assertEqual(restored["model_providers"]["OpenAI"], legacy)
             self.assertGreaterEqual(len(list((home / "backup-switch").glob("config.toml.*.bak"))), 2)
 
     @unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "Requires Windows PowerShell")
-    def test_native_provider_switch_removes_case_variant_table_and_proxy_url(self):
+    def test_native_provider_switch_preserves_legacy_official_provider(self):
         with tempfile.TemporaryDirectory(dir=FILE.parent.parent) as directory:
             root = Path(directory)
             home = root / ".codex"
@@ -187,9 +193,16 @@ class SwitchInstallerTests(unittest.TestCase):
             (project / "models.txt").write_text("* ds/deepseek-flash\n", encoding="utf-8")
             (project / "proxy-local.env").write_text("PORT=8787\n", encoding="utf-8")
             old_case = "openai".title()
+            legacy_table = (
+                f'[model_providers.{old_case}]\nname = "OpenAI"\n'
+                'base_url = "https://chatgpt.com/backend-api/codex"\n'
+                'wire_api = "responses"\nrequires_openai_auth = true\n'
+                'supports_websockets = true\n'
+            )
             (home / "config.toml").write_text(
                 f'model_provider = "{old_case}"\nmodel = "gpt-6.1-sol"\n'
-                f'\n[model_providers.{old_case}]\nname = "CMP"\nwire_api = "responses"\n'
+                f'\n{legacy_table}'
+                '\n[model_providers.openai]\nname = "invalid override"\n'
                 '\n[plugins.fixture]\nenabled = true\n', encoding="utf-8",
             )
             MODULE.install(home, project)
@@ -199,9 +212,21 @@ class SwitchInstallerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
             current = tomllib.loads((home / "config.toml").read_text(encoding="utf-8-sig"))
             self.assertEqual(current["model_provider"], "openai")
-            self.assertNotIn("model_providers", current)
+            self.assertIn(legacy_table, (home / "config.toml").read_text(encoding="utf-8-sig"))
+            self.assertEqual(current["model_providers"]["OpenAI"]["base_url"],
+                             "https://chatgpt.com/backend-api/codex")
+            self.assertNotIn("openai", current["model_providers"])
             self.assertNotIn("openai_base_url", current)
             self.assertEqual(current["plugins"]["fixture"]["enabled"], True)
+
+            command[-1] = str(home / "config_cmp.toml")
+            result = subprocess.run(command, capture_output=True, text=True, timeout=35)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            cmp_config = tomllib.loads((home / "config.toml").read_text(encoding="utf-8-sig"))
+            self.assertEqual(cmp_config["model_provider"], "openai")
+            self.assertEqual(cmp_config["openai_base_url"], "http://127.0.0.1:8787/v1")
+            self.assertEqual(cmp_config["model_providers"]["OpenAI"],
+                             current["model_providers"]["OpenAI"])
 
 
 if __name__ == "__main__":

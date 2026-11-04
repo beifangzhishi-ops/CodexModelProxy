@@ -116,18 +116,26 @@ $newTopText = [string]::Join($newLine, $rewrittenTopLines)
 if (-not $newTopText.EndsWith($newLine)) { $newTopText += $newLine }
 $newText = $newTopText + $currentRestText
 
-# The lowercase `openai` provider is built into Codex. Remove any customized
-# case variant and any local override table for this provider, preserving all
-# unrelated provider tables, plugins and MCP settings.
-$nativeTables = [regex]::Matches($newText, '(?m)^[ \t]*\[model_providers\.(?<id>[A-Za-z0-9_-]+)\]')
-$nativeTableNames = @($nativeTables | ForEach-Object { $_.Groups['id'].Value } |
-    Where-Object { $_.ToLowerInvariant() -ceq 'openai' } |
-    Select-Object -Unique)
-foreach ($id in $nativeTableNames) {
-    $section = Get-TableSpan $newText ('model_providers.' + $id)
-    if ($null -ne $section) {
-        $newText = $newText.Substring(0, $section.Start) + $newText.Substring($section.End)
-    }
+# Only the lowercase `openai` is the built-in provider whose route is switched.
+# Keep the case-sensitive `OpenAI` custom provider for historical conversations:
+# its own base_url is always the official ChatGPT endpoint, never the CMP URL.
+$lowercaseOverride = Get-TableSpan $newText 'model_providers.openai'
+if ($null -ne $lowercaseOverride) {
+    $newText = $newText.Substring(0, $lowercaseOverride.Start) +
+        $newText.Substring($lowercaseOverride.End)
+}
+if ($null -eq (Get-TableSpan $newText 'model_providers.OpenAI')) {
+    if (-not $newText.EndsWith($newLine)) { $newText += $newLine }
+    $legacyLines = @(
+        '[model_providers.OpenAI]'
+        'name = "OpenAI"'
+        'base_url = "https://chatgpt.com/backend-api/codex"'
+        'wire_api = "responses"'
+        'requires_openai_auth = true'
+        'supports_websockets = true'
+        'supports_standalone_web_search = true'
+    )
+    $newText += $newLine + [string]::Join($newLine, $legacyLines) + $newLine
 }
 
 # Final structural checks before changing config.toml.
@@ -135,7 +143,7 @@ $finalTop = Get-TopAssignments $newText $managedTopKeys
 foreach ($key in $targetTop.Keys) {
     if (-not $finalTop.ContainsKey($key)) { throw ('Switch result missing key: ' + $key) }
 }
-if ([regex]::IsMatch($newText, '(?im)^[ \t]*\[model_providers\.openai\]')) {
+if ($null -ne (Get-TableSpan $newText 'model_providers.openai')) {
     throw 'Built-in openai provider still has a local override table'
 }
 
