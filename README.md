@@ -90,7 +90,7 @@ CMP 的对话协议仍为原生 Responses API，不提供 Chat Completions 转�
 | `POST /v1/memories/trace_summarize` | Codex 记忆摘要 |
 | `POST /v1/realtime/calls` | Codex Realtime 通话创建 |
 
-这些接口仅转发给启用中的 `chatgpt` 登录透传 Provider；保留原始 Content-Type、OAuth 与账号头，不把本地访问令牌传给上游，也不向第三方 Provider 分流。模型 `gpt-reserve`（Luna Reserve）属于原有 `gpt-*` 官方透传路由；`codex-auto-review` 属于 Codex 官方审查专用 ID，也直接透传 ChatGPT 后端。不要求这两个 ID 出现在精选文件。原生 WebSocket Upgrade **尚未实现**，不能把 HTTP Responses 转发视作 WebSocket 兼容保证。
+这些接口仅转发给启用中的 `chatgpt` 登录透传 Provider；保留原始 Content-Type、OAuth 与账号头，不把本地访问令牌传给上游，也不向第三方 Provider 分流。模型 `gpt-reserve`（Luna Reserve）属于原有 `gpt-*` 官方透传路由；`codex-auto-review` 属于 Codex 官方审查专用 ID，也直接透传 ChatGPT 后端。不要求这两个 ID 出现在精选文件。Responses WebSocket 使用独立的双向 WS 网关，不等同于这些固定 POST 接口。
 
 所有新增接口的测试使用本机 mock HTTP 服务，不请求真实图像生成 API，也不消耗生成额度。
 
@@ -127,8 +127,9 @@ Node.js 24 可运行：在仓库根目录使用 `node --test --test-isolation=no
 
 - 官方直连和 CMP 模式均使用 Codex 内置的 `model_provider = "openai"`（区分大小写），不建立自定义同名 Provider 表。官方直连不设置 `openai_base_url`，自动采用 Codex 自己的官方登录、模型接口及默认 Responses WebSocket 能力。
 - CMP 模式通过顶层 `openai_base_url` 指向本地 CMP，继续使用同一个原生 Provider。内置 Provider 不接受自定义 `http_headers` 覆盖，因此当 CMP 启用 `PROXY_ACCESS_TOKEN` 时，切换器把现有访问令牌编码到本地 `/_cmp-auth/<令牌>/v1` URL 前缀；CMP 验证令牌后移除前缀，绝不向上游转发或在日志中输出它。请勿公开带令牌的完整本地 URL。
-- CMP 当前没有 Responses WebSocket 转发：对 Upgrade 明确返回 HTTP 426，Codex 可回退到 HTTP Responses。官方直连不经过 CMP，可以独立测试 WS。不要把“同一个原生 Provider”误认为“CMP 已经实现 WS”。
+- CMP 通过 `GET /v1/responses` WebSocket Upgrade 接入 Codex；收到首个 `response.create` 后进行模型路由。ChatGPT 透传使用真正的上游 Responses WS；只提供 HTTP Responses 的第三方 Provider 通过 WS→HTTP/SSE 桥接。HTTP 101 仅证明握手，必须实测模型请求、增量续接和 `response.completed` 才算端到端完成。
 - `codex-switch/install.py` 刷新管理中的模板和切换脚本，但不自动切换正在使用的 Codex；`switch_config.ps1` 只更新模型、认证和地址相关配置，保留插件、MCP 等其他设置，并在改写前备份原 `config.toml`。
 - CMP URL generation uses the current server authentication configuration (PROXY_ACCESS_TOKEN or proxy-config.json access_token), not stale Codex headers. With no server token, use the ordinary http://127.0.0.1:<port>/v1 URL.
-- CMP rejection of Responses WebSocket Upgrade returns HTTP 426; client abort/reset is handled on the detached socket so ECONNRESET cannot terminate the HTTP proxy. The built-in openai provider should then fall back to HTTP Responses; use a fresh Codex conversation after changing the active profile.
-- Codex's built-in openai provider sends zstd-compressed HTTP Responses requests after WebSocket fallback. CMP decodes supported request Content-Encoding values (zstd, gzip, deflate, br) under the 64 MiB expanded-body limit and removes Content-Encoding/body checksums when forwarding rebuilt JSON to upstream services, including /responses/compact. Node.js 24 provides the built-in zstd decoder.
+- WS upgrades preserve existing local access-token checks, reject unauthorized origins, and handle abrupt client ECONNRESET without terminating CMP. Native ChatGPT WS forwards OAuth only to the ChatGPT upstream; third-party bridge uses provider-specific API keys.
+- The HTTP Responses path independently accepts zstd, gzip, deflate and br under the 64 MiB expanded-body limit; rebuilt requests strip stale compression metadata. Node.js 24 supplies zstd decompression.
+- WS runtime dependency is the pinned `ws` package. Run `npm ci` once after updating a checkout and before starting CMP; `node_modules` remains local and ignored by Git.

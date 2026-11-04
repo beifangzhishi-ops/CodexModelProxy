@@ -1,0 +1,9 @@
+﻿{
+  "name": "codex-model-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Codex native Responses HTTP and WebSocket proxy",
+  "dependencies": {
+    "ws": "8.22.1"
+  }
+}

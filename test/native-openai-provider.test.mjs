@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
 import zlib from 'node:zlib';
+import WebSocket from 'ws';
 import { createProxyServer } from '../server.mjs';
 
 const logger = { info() {}, warn() {}, error() {} };
@@ -72,7 +73,7 @@ test('built-in openai uses tokenized openai_base_url without weakening CMP acces
   }
 });
 
-test('CMP explicitly rejects WS upgrade with 426 so Codex can fall back to HTTP', async () => {
+test('CMP accepts Responses WS upgrade and rejects unsupported models at message level', async () => {
   const proxy = createProxyServer({
     config: { providers: {} },
     logger,
@@ -82,17 +83,21 @@ test('CMP explicitly rejects WS upgrade with 426 so Codex can fall back to HTTP'
   const proxyUrl = await listen(proxy);
   try {
     const host = new URL(proxyUrl);
-    const response = await new Promise((resolve, reject) => {
-      const socket = net.connect(Number(host.port), host.hostname);
-      let data = '';
-      socket.on('connect', () => socket.write(
-        'GET /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n',
-      ));
-      socket.on('data', (chunk) => { data += chunk.toString('utf8'); });
-      socket.on('end', () => resolve(data));
-      socket.on('error', reject);
-    });
-    assert.match(response, /^HTTP\/1\.1 426 Upgrade Required/);
+    const socket = new WebSocket(`ws://${host.host}/v1/responses`);
+    try {
+      await new Promise((resolve, reject) => {
+        socket.once('open', resolve);
+        socket.once('error', reject);
+      });
+      const result = new Promise((resolve, reject) => {
+        socket.once('message', message => resolve(JSON.parse(message.toString())));
+        socket.once('error', reject);
+      });
+      socket.send(JSON.stringify({ type: 'response.create', model: 'not-an-official-model' }));
+      assert.equal((await result).type, 'error');
+    } finally {
+      socket.terminate();
+    }
   } finally {
     await close(proxy);
   }

@@ -23,6 +23,7 @@ import {
 import { createHistoryMonitor } from './history-monitor.mjs';
 import { createWindowsSystemProxyResolver } from './system-proxy.mjs';
 import { createProxyAgent } from './proxy-agent.mjs';
+import { installResponsesWebsocketGateway } from './responses-ws.mjs';
 import {
   createProviderRegistry,
   DEFAULT_PROVIDERS_FILE,
@@ -464,17 +465,9 @@ export function createProxyServer({
 
     sendJson(res, 404, { error: { type: 'not_found', message: '未找到该路径' } });
   });
-  // Codex's built-in OpenAI provider enables Responses WebSockets. CMP does
-  // not proxy WS: 426 lets the client explicitly fall back to HTTP Responses.
-  server.on('upgrade', (_req, socket) => {
-    // Upgrade sockets are detached from Node's HTTP server. A WebSocket client
-    // may close/reset immediately after receiving our 426 response; without
-    // a socket error listener, ECONNRESET becomes an uncaught exception and
-    // kills the entire CMP process.
-    socket.on('error', () => {
-      socket.destroy();
-    });
-    socket.end('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+  installResponsesWebsocketGateway(server, {
+    registry, proxyForModel, isAuthorized, urlAccessToken, safeEqual,
+    logger, secrets, env,
   });
   server.providerRegistry = registry;
   server.directModels = directModels;

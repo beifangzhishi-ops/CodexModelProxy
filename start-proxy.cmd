@@ -8,6 +8,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if not exist "node_modules\ws\package.json" (
+  echo [codex-proxy] ERROR: WebSocket dependency missing. Run npm ci in the CMP project directory.
+  exit /b 1
+)
+
 if not exist "proxy-secrets.env" if not exist "providers.local.json" (
   echo [codex-proxy] ERROR: no local credentials found. Copy proxy-secrets.env.example or providers.local.json.example and fill the required keys.
   exit /b 1
