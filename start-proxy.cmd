@@ -30,12 +30,20 @@ if %errorlevel% equ 0 (
 )
 
 echo [codex-proxy] Starting proxy in background (logs: proxy.log / proxy.err.log)...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws=New-Object -ComObject WScript.Shell; $null = $ws.Run('cmd /c cd /d ""%~dp0"" && node server.mjs > proxy.log 2> proxy.err.log', 0, $false)"
-timeout /t 2 /nobreak >nul
-curl.exe --noproxy "*" --silent --show-error --fail --max-time 5 "http://127.0.0.1:%PORT%/healthz" >nul 2>nul
+node proxy-launch.mjs
 if errorlevel 1 (
-  echo [codex-proxy] FAILED: health check failed. See proxy.err.log.
+  echo [codex-proxy] FAILED: could not launch detached CMP process.
   exit /b 1
 )
+rem Poll instead of using "timeout", which requires interactive stdin on some hosts.
+for /l %%N in (1,1,12) do (
+  curl.exe --noproxy "*" --silent --fail --max-time 2 "http://127.0.0.1:%PORT%/healthz" >nul 2>nul
+  if not errorlevel 1 goto :started
+  node --input-type=module -e "await new Promise(resolve => setTimeout(resolve, 500))"
+)
+echo [codex-proxy] FAILED: health check failed. See proxy.err.log.
+exit /b 1
+
+:started
 echo [codex-proxy] Started. PID=%~dp0proxy.pid
 exit /b 0

@@ -19,6 +19,16 @@ async function close(server) {
   await new Promise(resolve => server.close(resolve));
 }
 
+function healthStatus(url) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(url, response => {
+      response.resume();
+      resolve(response.statusCode);
+    });
+    request.once('error', reject);
+  });
+}
+
 async function connect(url, headers) {
   const socket = new WebSocket(url, { headers });
   await new Promise((resolve, reject) => {
@@ -112,7 +122,7 @@ test('ChatGPT Responses WS forwards full prewarm, generation, OAuth and continua
     assert.equal(upstreamHeaders.length, 1);
     assert.equal(upstreamHeaders[0].authorization, 'Bearer test-oauth');
     assert.equal(upstreamHeaders[0]['chatgpt-account-id'], 'test-account');
-    assert.equal((await fetch(proxyBase + '/healthz')).status, 200);
+    assert.equal(await healthStatus(proxyBase + '/healthz'), 200);
   } finally {
     client?.terminate();
     for (const socket of wss.clients) socket.terminate();
@@ -233,7 +243,7 @@ test('Responses WS upgrade rejects incorrect local token and cross-origin access
     const secret = Buffer.from('ws-private-token').toString('base64url');
     const client = await connect(`${wsBase}/_cmp-auth/${secret}/v1/responses`);
     client.terminate();
-    assert.equal((await fetch(base + '/healthz')).status, 200);
+    assert.equal(await healthStatus(base + '/healthz'), 200);
   } finally {
     await close(proxy);
   }
