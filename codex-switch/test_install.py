@@ -20,6 +20,36 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SwitchInstallerTests(unittest.TestCase):
+    def test_stale_codex_header_cannot_force_tokenized_cmp_url(self):
+        with tempfile.TemporaryDirectory(dir=FILE.parent.parent) as directory:
+            root = Path(directory)
+            home = root / '.codex'
+            project = root / 'cmp'
+            home.mkdir()
+            project.mkdir()
+            (project / 'proxy-local.env').write_text('PORT=8787\n', encoding='utf-8')
+            (project / 'proxy-config.json').write_text('{}\n', encoding='utf-8')
+            (home / 'config.toml').write_text(
+                'model_provider = "OpenAI"\n'
+                '[model_providers.OpenAI]\n'
+                'base_url = "http://127.0.0.1:8787/v1"\n'
+                'http_headers = { "X-Proxy-Access-Token" = "unused-stale-header" }\n',
+                encoding='utf-8',
+            )
+            with mock.patch.dict(os.environ, {'PROXY_ACCESS_TOKEN': ''}):
+                url, headers = MODULE.get_local_proxy_settings(project)
+            self.assertEqual(url, 'http://127.0.0.1:8787/v1')
+            self.assertEqual(headers, {})
+            cmp_profile = tomllib.loads(MODULE.render_profile('gpt-test', 'medium', url, headers))
+            self.assertEqual(cmp_profile['openai_base_url'], url)
+
+            (project / 'proxy-config.json').write_text(
+                '{"access_token": "real-current-token"}', encoding='utf-8',
+            )
+            with mock.patch.dict(os.environ, {'PROXY_ACCESS_TOKEN': ''}):
+                _, headers = MODULE.get_local_proxy_settings(project)
+            self.assertEqual(headers, {'X-Proxy-Access-Token': 'real-current-token'})
+
     def test_two_profiles_are_independent_and_existing_configuration_is_untouched(self):
         with tempfile.TemporaryDirectory(dir=FILE.parent.parent) as directory:
             root = Path(directory)

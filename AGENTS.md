@@ -30,3 +30,4 @@
 - Keep the .codex top-level tidy with codex-switch/tidy_root.py after preview. Archive old root-level configurations and model lists, delete only orphaned state-temp files older than 7 days, never prune current caches, sessions, authentication, or databases.
 - 模型自动发现必须保留上游可验证的上下文长度和能力字段；任何未知窗口不得写死为统一假值。`context_window` 与 `max_context_window` 不能混用，其他 token 限额不得冒充总窗口。无登录凭据的 GPT 固定可选列表不是官方实时模型目录。
 - 官方直连与 CMP 模式均使用内置小写 `openai` Provider。官方配置不得携带 `openai_base_url`；CMP 配置仅用顶层 `openai_base_url`，有本地访问令牌时使用经过校验的本地 URL 认证前缀，不能弱化原来的访问控制。切换器必须保持插件与 MCP 配置不变，并清理无效的 Provider 覆盖表；CMP 未实现 WebSocket 透传，必须明确回退 HTTP。
+- CMP authentication URLs must follow the server-side token configuration, never an inherited Codex header; omit the auth segment when no token is configured.

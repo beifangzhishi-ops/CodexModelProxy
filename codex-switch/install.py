@@ -77,7 +77,7 @@ def active_cmp_model(home: Path, cmp_url: str, cmp_root: Path) -> str:
     return first_selected_model(cmp_root)
 
 
-def get_local_proxy_settings(home: Path, cmp_root: Path) -> tuple[str, dict]:
+def get_local_proxy_settings(cmp_root: Path) -> tuple[str, dict]:
     env = {}
     local = cmp_root / "proxy-local.env"
     if local.exists():
@@ -90,27 +90,18 @@ def get_local_proxy_settings(home: Path, cmp_root: Path) -> tuple[str, dict]:
         raise ValueError("CMP PORT must be a valid TCP port")
     url = f"http://127.0.0.1:{port}/v1"
 
-    # Reuse the user's current CMP access header if configured, without output.
-    headers: dict[str, str] = {}
-    candidates = [home / "config.toml"]
-    candidates += sorted(home.glob("config_*.toml"), key=lambda f: f.stat().st_mtime, reverse=True)
-    for file in candidates:
-        try:
-            conf = load_toml(file)
-        except (ValueError, OSError):
-            continue
-        for provider in conf.get("model_providers", {}).values():
-            base = provider.get("base_url") or ""
-            if base.rstrip("/") == url.rstrip("/") and isinstance(provider.get("http_headers"), dict):
-                headers = dict(provider["http_headers"])
-                break
-        if headers:
-            break
+    # Only the server's current authentication configuration is authoritative.
+    # Previous Codex templates may retain a stale access header even though
+    # the running CMP has no access token; never promote that header into a URL.
     access_token = env.get("PROXY_ACCESS_TOKEN") or os.getenv("PROXY_ACCESS_TOKEN")
-    if access_token and not any(k.casefold() == "x-proxy-access-token" for k in headers):
-        headers["X-Proxy-Access-Token"] = access_token
-    if not all(isinstance(k, str) and isinstance(v, str) for k, v in headers.items()):
-        raise ValueError("CMP http_headers must contain only text keys and values")
+    if not access_token:
+        proxy_config = cmp_root / "proxy-config.json"
+        if proxy_config.is_file():
+            configured = json.loads(proxy_config.read_text(encoding="utf-8-sig"))
+            access_token = configured.get("access_token", "")
+    if not isinstance(access_token, str):
+        raise ValueError("CMP access token must be a string")
+    headers = {"X-Proxy-Access-Token": access_token.strip()} if access_token.strip() else {}
     return url, headers
 
 
@@ -206,7 +197,7 @@ def install(home: Path, cmp_root: Path, *, create_shortcuts: bool = False) -> No
         raise FileNotFoundError("Missing switch_config.ps1")
 
     model, effort = active_official_model(home)
-    url, headers = get_local_proxy_settings(home, cmp_root)
+    url, headers = get_local_proxy_settings(cmp_root)
     cmp_model = active_cmp_model(home, url, cmp_root)
     official = render_profile(model, effort, None, {})
     cmp_profile = render_profile(cmp_model, "medium", url, headers)

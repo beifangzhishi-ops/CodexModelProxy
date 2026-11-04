@@ -127,3 +127,4 @@ Node.js 24 可运行：在仓库根目录使用 `node --test --test-isolation=no
 - CMP 模式通过顶层 `openai_base_url` 指向本地 CMP，继续使用同一个原生 Provider。内置 Provider 不接受自定义 `http_headers` 覆盖，因此当 CMP 启用 `PROXY_ACCESS_TOKEN` 时，切换器把现有访问令牌编码到本地 `/_cmp-auth/<令牌>/v1` URL 前缀；CMP 验证令牌后移除前缀，绝不向上游转发或在日志中输出它。请勿公开带令牌的完整本地 URL。
 - CMP 当前没有 Responses WebSocket 转发：对 Upgrade 明确返回 HTTP 426，Codex 可回退到 HTTP Responses。官方直连不经过 CMP，可以独立测试 WS。不要把“同一个原生 Provider”误认为“CMP 已经实现 WS”。
 - `codex-switch/install.py` 刷新管理中的模板和切换脚本，但不自动切换正在使用的 Codex；`switch_config.ps1` 只更新模型、认证和地址相关配置，保留插件、MCP 等其他设置，并在改写前备份原 `config.toml`。
+- CMP URL generation uses the current server authentication configuration (PROXY_ACCESS_TOKEN or proxy-config.json access_token), not stale Codex headers. With no server token, use the ordinary http://127.0.0.1:<port>/v1 URL.
