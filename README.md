@@ -54,7 +54,7 @@ CMP 在项目根目录生成每台机器自己的第三方模型精选文件 `mo
 
 安装后在 **CMP 项目根目录** 提供 **Codex-官方直连**、**Codex-CMP模式** 两个快捷方式，以及用记事本打开这份 `models.txt` 的 **CMP-模型精选** 快捷方式。桌面不创建快捷方式；快捷方式只负责打开文件/脚本，不另外生成模型配置。这三个本机生成的 `.lnk` 文件不提交 Git。
 
-历史会话保留独立的大写 `[model_providers.OpenAI]`（大小写敏感），只用于继续使用旧 provider 标识的 Codex 对话。切换器仅将默认小写 `openai` 在官方直连和 CMP 之间切换；大写 `OpenAI` 始终使用 `https://chatgpt.com/backend-api/codex`、`wire_api = "responses"` 和 ChatGPT 登录认证，不跟随 CMP 代理。若历史 provider 表缺失，首次切换会补建；已存在的表不在切换时覆盖。旧会话数据库、登录凭据和 MCP/插件配置均不修改。
+历史会话保留独立的大写 `[model_providers.OpenAI]`（大小写敏感），只用于继续使用旧 provider 标识的 Codex 对话。切换器仅将默认小写 `openai` 在官方直连和 CMP 之间切换；大写 `OpenAI` 始终使用 `https://chatgpt.com/backend-api/codex`、`wire_api = "responses"` 和 ChatGPT 登录认证，不跟随 CMP 代理。每次切换会补全或修复大写 `OpenAI` 表，使旧的空白、错误路径或误嵌入的顶层字段恢复为纯官方直连配置。旧会话数据库、登录凭据和 MCP/插件配置均不修改。
 
 ### Tidying the .codex top-level directory
 

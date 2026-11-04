@@ -182,7 +182,7 @@ class SwitchInstallerTests(unittest.TestCase):
             self.assertGreaterEqual(len(list((home / "backup-switch").glob("config.toml.*.bak"))), 2)
 
     @unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "Requires Windows PowerShell")
-    def test_native_provider_switch_preserves_legacy_official_provider(self):
+    def test_native_provider_switch_repairs_malformed_legacy_provider(self):
         with tempfile.TemporaryDirectory(dir=FILE.parent.parent) as directory:
             root = Path(directory)
             home = root / ".codex"
@@ -192,12 +192,13 @@ class SwitchInstallerTests(unittest.TestCase):
             (project / "AGENTS.md").write_text("CMP rules", encoding="utf-8")
             (project / "models.txt").write_text("* ds/deepseek-flash\n", encoding="utf-8")
             (project / "proxy-local.env").write_text("PORT=8787\n", encoding="utf-8")
-            old_case = "openai".title()
+            old_case = "OpenAI"
             legacy_table = (
                 f'[model_providers.{old_case}]\nname = "OpenAI"\n'
-                'base_url = "https://chatgpt.com/backend-api/codex"\n'
-                'wire_api = "responses"\nrequires_openai_auth = true\n'
-                'supports_websockets = true\n'
+                'model_provider = "openai"\nmodel = "gpt-6.1-sol"\n'
+                'model_reasoning_effort = "medium"\n'
+                'forced_login_method = "chatgpt"\n'
+                'base_url = "http://127.0.0.1:8787/v1"\n'
             )
             (home / "config.toml").write_text(
                 f'model_provider = "{old_case}"\nmodel = "gpt-6.1-sol"\n'
@@ -212,9 +213,14 @@ class SwitchInstallerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
             current = tomllib.loads((home / "config.toml").read_text(encoding="utf-8-sig"))
             self.assertEqual(current["model_provider"], "openai")
-            self.assertIn(legacy_table, (home / "config.toml").read_text(encoding="utf-8-sig"))
-            self.assertEqual(current["model_providers"]["OpenAI"]["base_url"],
-                             "https://chatgpt.com/backend-api/codex")
+            self.assertNotIn(legacy_table, (home / "config.toml").read_text(encoding="utf-8-sig"))
+            legacy = current["model_providers"]["OpenAI"]
+            self.assertEqual(legacy["base_url"], "https://chatgpt.com/backend-api/codex")
+            self.assertEqual(legacy["wire_api"], "responses")
+            self.assertIs(legacy["requires_openai_auth"], True)
+            self.assertIs(legacy["supports_websockets"], True)
+            self.assertNotIn("model_provider", legacy)
+            self.assertNotIn("model", legacy)
             self.assertNotIn("openai", current["model_providers"])
             self.assertNotIn("openai_base_url", current)
             self.assertEqual(current["plugins"]["fixture"]["enabled"], True)

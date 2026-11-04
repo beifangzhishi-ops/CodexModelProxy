@@ -117,25 +117,30 @@ if (-not $newTopText.EndsWith($newLine)) { $newTopText += $newLine }
 $newText = $newTopText + $currentRestText
 
 # Only the lowercase `openai` is the built-in provider whose route is switched.
-# Keep the case-sensitive `OpenAI` custom provider for historical conversations:
-# its own base_url is always the official ChatGPT endpoint, never the CMP URL.
+# The case-sensitive legacy `OpenAI` must always use official ChatGPT:
+# repair missing, malformed, or previously proxied tables on each switch.
 $lowercaseOverride = Get-TableSpan $newText 'model_providers.openai'
 if ($null -ne $lowercaseOverride) {
     $newText = $newText.Substring(0, $lowercaseOverride.Start) +
         $newText.Substring($lowercaseOverride.End)
 }
-if ($null -eq (Get-TableSpan $newText 'model_providers.OpenAI')) {
+$legacyLines = @(
+    '[model_providers.OpenAI]'
+    'name = "OpenAI"'
+    'base_url = "https://chatgpt.com/backend-api/codex"'
+    'wire_api = "responses"'
+    'requires_openai_auth = true'
+    'supports_websockets = true'
+    'supports_standalone_web_search = true'
+)
+$legacyText = [string]::Join($newLine, $legacyLines) + $newLine
+$legacySection = Get-TableSpan $newText 'model_providers.OpenAI'
+if ($null -ne $legacySection) {
+    $newText = $newText.Substring(0, $legacySection.Start) +
+        $legacyText + $newText.Substring($legacySection.End)
+} else {
     if (-not $newText.EndsWith($newLine)) { $newText += $newLine }
-    $legacyLines = @(
-        '[model_providers.OpenAI]'
-        'name = "OpenAI"'
-        'base_url = "https://chatgpt.com/backend-api/codex"'
-        'wire_api = "responses"'
-        'requires_openai_auth = true'
-        'supports_websockets = true'
-        'supports_standalone_web_search = true'
-    )
-    $newText += $newLine + [string]::Join($newLine, $legacyLines) + $newLine
+    $newText += $newLine + $legacyText
 }
 
 # Final structural checks before changing config.toml.
