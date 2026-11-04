@@ -148,6 +148,8 @@ export function buildProviderRoute({
     upstream_base_url: modelSpec.upstream_base_url || provider.base_url,
     upstream_model: modelSpec.upstream_model || modelName,
     auth_mode: effectiveAuthMode,
+    ws_transport: modelSpec.ws_transport || provider.ws_transport ||
+      (provider.id === 'chatgpt' ? 'native' : 'http_bridge'),
     api_key: String(modelSpec.api_key || '').trim(),
     api_key_env: typeof modelSpec.api_key_env === 'string'
       ? modelSpec.api_key_env.trim()
@@ -168,6 +170,9 @@ export function buildProviderRoute({
     ...(modelSpec.tool_output_format ? { tool_output_format: modelSpec.tool_output_format } : {}),
     ...(modelSpec.tool_schema_compat ? { tool_schema_compat: modelSpec.tool_schema_compat } : {}),
   };
+  if (!['native', 'http_bridge'].includes(route.ws_transport)) {
+    throw new Error(`Invalid ws_transport for model ${publicModel}`);
+  }
   return applyCompatibilityProfile(
     {
       ...route,

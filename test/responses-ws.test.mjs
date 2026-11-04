@@ -238,3 +238,48 @@ test('Responses WS upgrade rejects incorrect local token and cross-origin access
     await close(proxy);
   }
 });
+
+test('explicit native third-party WS receives its own API key, never Codex OAuth', async () => {
+  let upstreamHeaders;
+  const upstream = http.createServer();
+  const wss = new WebSocketServer({ server: upstream, path: '/responses' });
+  wss.on('connection', (socket, req) => {
+    upstreamHeaders = req.headers;
+    socket.on('message', raw => {
+      const frame = JSON.parse(raw.toString());
+      socket.send(JSON.stringify({
+        type: 'response.completed',
+        response: { id: 'resp_native_1', model: frame.model },
+      }));
+    });
+  });
+  const upstreamBase = await listen(upstream);
+  const proxy = createProxyServer({
+    config: { providers: { provider1: {
+      enabled: true, auth_mode: 'api_key', api_key_env: 'EXPLICIT_WS_KEY',
+      ws_transport: 'native', protocol: 'responses', network: 'direct',
+      model_prefix: 'third/', base_url: upstreamBase,
+      discover_models: false, models: { 'third-native': {} },
+    } } },
+    logger, env: { EXPLICIT_WS_KEY: 'separate-provider-token' },
+    systemProxyResolver: async () => ({ url: '', mode: 'direct' }),
+  });
+  const proxyBase = await listen(proxy);
+  let client;
+  try {
+    client = await connect(proxyBase.replace('http:', 'ws:') + '/v1/responses', {
+      authorization: 'Bearer private-codex-oauth',
+      'chatgpt-account-id': 'private-account',
+    });
+    const result = await sendTurn(client, { model: 'third/third-native', input: 'ping' });
+    assert.equal(result.at(-1).response.model, 'third-native');
+    assert.equal(upstreamHeaders.authorization, 'Bearer separate-provider-token');
+    assert.equal(upstreamHeaders['chatgpt-account-id'], undefined);
+  } finally {
+    client?.terminate();
+    for (const socket of wss.clients) socket.terminate();
+    wss.close();
+    await close(proxy);
+    await close(upstream);
+  }
+});

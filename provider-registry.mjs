@@ -17,6 +17,7 @@ export const DEFAULT_PROVIDERS_FILE = path.join(__dirname, 'providers.local.json
 export const DEFAULT_LOCAL_ENV_FILE = path.join(__dirname, 'proxy-local.env');
 export const SUPPORTED_AUTH_MODES = new Set(['api_key', 'openai_passthrough', 'none']);
 export const SUPPORTED_PROTOCOLS = new Set(['responses']);
+export const SUPPORTED_WS_TRANSPORTS = new Set(['native', 'http_bridge']);
 
 const LEGACY_PROVIDER_KEY_ENV = Object.freeze({
   cpa: 'CPA_API_KEY',
@@ -129,6 +130,7 @@ export function validateProvider(providerId, raw, {
   const enabled = raw.enabled !== false;
   const authMode = raw.auth_mode || 'api_key';
   const protocol = raw.protocol || 'responses';
+  const wsTransport = raw.ws_transport || (id === 'chatgpt' ? 'native' : 'http_bridge');
   const baseUrl = String(raw.base_url || '').trim();
   const namespace = normalizeNamespace(raw.model_prefix || `${id}/`, id);
 
@@ -147,6 +149,9 @@ export function validateProvider(providerId, raw, {
   }
   if (!SUPPORTED_PROTOCOLS.has(protocol)) {
     throw new Error(`Provider ${id} 字段 protocol 不支持：${protocol}；当前仅支持 responses`);
+  }
+  if (!SUPPORTED_WS_TRANSPORTS.has(wsTransport)) {
+    throw new Error(`Provider ${id} invalid ws_transport: ${wsTransport}`);
   }
   if (enabled && !baseUrl && !allowMissingBaseUrl) {
     throw new Error(`Provider ${id} 缺少 base_url；请在 providers.local.json 中填写 API 根地址`);
@@ -194,6 +199,7 @@ export function validateProvider(providerId, raw, {
     base_url: baseUrl.replace(/\/+$/, ''),
     auth_mode: authMode,
     protocol,
+    ws_transport: wsTransport,
     discover_models: raw.discover_models === true,
     model_prefix: `${namespace}/`,
     namespace,

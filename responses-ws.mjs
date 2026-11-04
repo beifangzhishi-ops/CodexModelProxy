@@ -1,6 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { randomBytes } from 'node:crypto';
+import { StringDecoder } from 'node:string_decoder';
 import WebSocket, { WebSocketServer } from 'ws';
 import { normalizeResponsesBody } from './history-normalize.mjs';
 import { resolveRouteApiKey } from './provider-registry.mjs';
@@ -46,9 +47,20 @@ function emit(socket, event) {
   return true;
 }
 
-function forwardNative({ client, frame, session, route, req, proxyForModel, selection, logger, closed }) {
-  if (!getHeader(req, 'authorization')) {
-    emitError(client, 'authentication_error', 'Missing ChatGPT credentials', 401, frame.stream_id);
+function forwardNative({ client, frame, session, route, req, proxyForModel, selection, logger, secrets, env, closed }) {
+  const authMode = route.auth_mode || 'api_key';
+  const headers = route.provider_id === 'chatgpt' ? upstreamHeaders(req) : {};
+  if (authMode === 'openai_passthrough') {
+    if (route.provider_id !== 'chatgpt') {
+      emitError(client, 'authentication_error', 'OAuth passthrough is limited to ChatGPT', 403, frame.stream_id);
+      return;
+    }
+  } else if (authMode === 'api_key') {
+    const key = resolveRouteApiKey(route, env, secrets);
+    if (key) headers.authorization = `Bearer ${key}`;
+  }
+  if (authMode !== 'none' && !headers.authorization) {
+    emitError(client, 'authentication_error', 'Missing upstream credentials', 401, frame.stream_id);
     return;
   }
   if (session.queue.length >= 32) {
@@ -56,7 +68,13 @@ function forwardNative({ client, frame, session, route, req, proxyForModel, sele
     return;
   }
   const forwarded = { ...frame, model: route.upstream_model };
-  session.queue.push(JSON.stringify(forwarded));
+  const payload = JSON.stringify(forwarded);
+  const pendingBytes = session.queue.reduce((total, item) => total + Buffer.byteLength(item), 0);
+  if (pendingBytes + Buffer.byteLength(payload) > MAX_MESSAGE) {
+    emitError(client, 'invalid_request_error', 'WebSocket send queue exceeded limit', 413, frame.stream_id);
+    return;
+  }
+  session.queue.push(payload);
   if (session.upstream?.readyState === WebSocket.OPEN) {
     while (session.queue.length && session.upstream.readyState === WebSocket.OPEN) {
       session.upstream.send(session.queue.shift());
@@ -71,14 +89,14 @@ function forwardNative({ client, frame, session, route, req, proxyForModel, sele
     const url = upstreamWsUrl(route.upstream_base_url);
     const agent = url.protocol === 'wss:' && proxy.url ? createProxyAgent(proxy.url) : undefined;
     const upstream = new WebSocket(url, {
-      headers: upstreamHeaders(req), agent, handshakeTimeout: 15_000,
+      headers, agent, handshakeTimeout: 15_000,
       maxPayload: MAX_MESSAGE, perMessageDeflate: true,
     });
     session.upstream = upstream;
     let failed = false;
     upstream.on('open', () => {
       if (closed()) return;
-      logger.info(`[codex-proxy] Responses WS upstream connected provider=chatgpt network=${proxy.mode}`);
+      logger.info(`[codex-proxy] Responses WS upstream connected provider=${route.provider_id} network=${proxy.mode}`);
       while (session.queue.length && upstream.readyState === WebSocket.OPEN) {
         upstream.send(session.queue.shift());
       }
@@ -92,10 +110,14 @@ function forwardNative({ client, frame, session, route, req, proxyForModel, sele
         emitError(client, 'upstream_error', 'ChatGPT WebSocket connection failed', 502, frame.stream_id);
       }
     });
-    upstream.on('close', () => {
+    upstream.on('close', code => {
       if (!closed() && client.readyState === WebSocket.OPEN) {
-        if (!failed) emitError(client, 'upstream_error', 'ChatGPT WebSocket connection closed', 502, frame.stream_id);
-        client.close(1011, 'Upstream connection closed');
+        if (code === 1000 || code === 1001) {
+          client.close(code, 'Upstream connection closed');
+        } else {
+          if (!failed) emitError(client, 'upstream_error', 'ChatGPT WebSocket connection closed', 502, frame.stream_id);
+          client.close(1011, 'Upstream connection closed');
+        }
       }
     });
     session.controller.signal.addEventListener('abort', () => upstream.terminate(), { once: true });
@@ -149,7 +171,7 @@ function pruneHistory(session) {
   }
 }
 
-async function bridgeHttpResponse({ client, frame, session, route, proxyUrl, secrets, env, req, signal }) {
+async function bridgeHttpResponse({ client, frame, session, route, proxyUrl, networkMode, logger, secrets, env, req, signal }) {
   const streamId = frame.stream_id;
   const model = route.upstream_model;
   let history = [];
@@ -226,6 +248,7 @@ async function bridgeHttpResponse({ client, frame, session, route, proxyUrl, sec
       resolve();
     }
     outgoing = lib.request(url, { method: 'POST', headers, ...(agent ? { agent } : {}) }, upstream => {
+      logger.info(`[codex-proxy] Responses WS HTTP bridge provider=${route.provider_id} network=${networkMode} status=${upstream.statusCode || 502}`);
       if ((upstream.statusCode || 502) >= 400) {
         upstream.resume();
         emitError(client, 'upstream_error', `HTTP ${upstream.statusCode}`, upstream.statusCode, streamId);
@@ -233,6 +256,7 @@ async function bridgeHttpResponse({ client, frame, session, route, proxyUrl, sec
         return;
       }
       let buffer = '';
+      const decoder = new StringDecoder('utf8');
       let sawEvent = false;
       function acceptEvent(data) {
         if (data === '[DONE]' || !data) return;
@@ -263,7 +287,7 @@ async function bridgeHttpResponse({ client, frame, session, route, proxyUrl, sec
         }
       }
       upstream.on('data', chunk => {
-        buffer = (buffer + chunk.toString('utf8')).replace(/\r\n/g, '\n');
+        buffer = (buffer + decoder.write(chunk)).replace(/\r\n/g, '\n');
         if (buffer.length > MAX_CONTEXT) {
           emitError(client, 'upstream_error', 'SSE event too large', 502, streamId);
           outgoing.destroy();
@@ -272,6 +296,7 @@ async function bridgeHttpResponse({ client, frame, session, route, proxyUrl, sec
         if (String(upstream.headers['content-type'] || '').includes('text/event-stream')) parseSse();
       });
       upstream.once('end', () => {
+        buffer += decoder.end();
         if (!sawEvent && String(upstream.headers['content-type'] || '').includes('application/json')) {
           try {
             const response = JSON.parse(buffer);
@@ -293,7 +318,7 @@ async function bridgeHttpResponse({ client, frame, session, route, proxyUrl, sec
         finish();
       });
       upstream.once('error', () => {
-        emitError(client, 'upstream_error', 'Upstream response interrupted', 502, streamId);
+        if (!ended) emitError(client, 'upstream_error', 'Upstream response interrupted', 502, streamId);
         finish();
       });
     });
@@ -422,14 +447,15 @@ export function installResponsesWebsocketGateway(server, {
         return;
       }
       const route = session.route;
-      if (route.provider_id === 'chatgpt' && route.auth_mode === 'openai_passthrough') {
-        forwardNative({ client, frame, session, route, req, proxyForModel, selection, logger, closed: () => closed });
+      if (route.ws_transport === 'native') {
+        forwardNative({ client, frame, session, route, req, proxyForModel, selection, logger, secrets, env, closed: () => closed });
       } else {
         session.pending = session.pending.then(async () => {
           if (closed) return;
           const proxy = await proxyForModel(selection.routeSlug, route.network);
           await bridgeHttpResponse({
-            client, frame, session, route, proxyUrl: proxy.url, secrets, env, req,
+            client, frame, session, route, proxyUrl: proxy.url, networkMode: proxy.mode,
+            logger, secrets, env, req,
             signal: abortAll.signal,
           });
         }).catch(() => {

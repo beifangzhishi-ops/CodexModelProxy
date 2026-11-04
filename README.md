@@ -131,5 +131,6 @@ Node.js 24 可运行：在仓库根目录使用 `node --test --test-isolation=no
 - `codex-switch/install.py` 刷新管理中的模板和切换脚本，但不自动切换正在使用的 Codex；`switch_config.ps1` 只更新模型、认证和地址相关配置，保留插件、MCP 等其他设置，并在改写前备份原 `config.toml`。
 - CMP URL generation uses the current server authentication configuration (PROXY_ACCESS_TOKEN or proxy-config.json access_token), not stale Codex headers. With no server token, use the ordinary http://127.0.0.1:<port>/v1 URL.
 - WS upgrades preserve existing local access-token checks, reject unauthorized origins, and handle abrupt client ECONNRESET without terminating CMP. Native ChatGPT WS forwards OAuth only to the ChatGPT upstream; third-party bridge uses provider-specific API keys.
+- Provider `ws_transport` accepts `native` or `http_bridge`. Defaults: `chatgpt=native`, other providers `http_bridge`; select `native` for another provider only after verifying its actual Responses WS support. Bridge responses use their own HTTP transport and do not imply a WS-capable third-party backend.
 - The HTTP Responses path independently accepts zstd, gzip, deflate and br under the 64 MiB expanded-body limit; rebuilt requests strip stale compression metadata. Node.js 24 supplies zstd decompression.
 - WS runtime dependency is the pinned `ws` package. Run `npm ci` once after updating a checkout and before starting CMP; `node_modules` remains local and ignored by Git.
