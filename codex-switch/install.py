@@ -98,7 +98,9 @@ def get_local_proxy_settings(cmp_root: Path) -> tuple[str, dict]:
         proxy_config = cmp_root / "proxy-config.json"
         if proxy_config.is_file():
             configured = json.loads(proxy_config.read_text(encoding="utf-8-sig"))
-            access_token = configured.get("access_token", "")
+            access_token = configured.get("access_token")
+    if access_token is None:
+        access_token = ""
     if not isinstance(access_token, str):
         raise ValueError("CMP access token must be a string")
     headers = {"X-Proxy-Access-Token": access_token.strip()} if access_token.strip() else {}
