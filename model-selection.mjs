@@ -23,6 +23,10 @@ function validId(id) {
     && !/[\r\n\t\0\s#]/u.test(id);
 }
 
+function isPassthroughId(id) {
+  return id.startsWith('chatgpt/') || id.startsWith('gpt-');
+}
+
 function initialFavorites(ids) {
   const choices = [];
   for (const prefix of ['ds/', 'kimi/']) {
@@ -37,7 +41,8 @@ function initialFavorites(ids) {
 }
 
 export function syncModelSelection(filePath, discoveredModels, logger = console) {
-  const ids = [...new Set(discoveredModels.map((model) => model?.id).filter(validId))];
+  const ids = [...new Set(discoveredModels.map((model) => model?.id)
+    .filter((id) => validId(id) && !isPassthroughId(id)))];
   const discovered = new Set(ids);
   let text;
   try {
@@ -56,20 +61,28 @@ export function syncModelSelection(filePath, discoveredModels, logger = console)
     return defaults;
   }
 
+  // This file controls only third-party favorites. Purge ChatGPT passthrough
+  // rows left by earlier catalog versions; keep other entries, comments and
+  // stars unchanged, including CPA models whose names happen to contain gpt.
+  const newline = text.includes('\r\n') ? '\r\n' : '\n';
+  const cleaned = text.split(/\r?\n/).filter((line) => {
+    const entry = parseEntry(line);
+    return !entry || !isPassthroughId(entry.id);
+  }).join(newline);
   const existing = new Set();
   const selected = new Set();
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of cleaned.split(/\r?\n/)) {
     const entry = parseEntry(line);
     if (!entry || !validId(entry.id)) continue;
     existing.add(entry.id);
     if (entry.selected) selected.add(entry.id);
   }
   const appended = ids.filter((id) => !existing.has(id));
-  if (appended.length) {
-    const suffix = (text.endsWith('\n') || text.length === 0 ? '' : '\n')
-      + appended.map((id) => `  ${id}`).join('\n') + '\n';
-    saveIfChanged(filePath, text + suffix);
-  }
+  const suffix = appended.length
+    ? (cleaned.endsWith('\n') || cleaned.length === 0 ? '' : newline)
+      + appended.map((id) => `  ${id}`).join(newline) + newline
+    : '';
+  if (cleaned !== text || suffix) saveIfChanged(filePath, cleaned + suffix);
   // A temporarily unavailable provider may leave no selected model online.
   // Show one discoverable model rather than an empty model picker.
   if (selected.size > 0 && !ids.some((id) => selected.has(id)) && ids.length) {

@@ -20,7 +20,7 @@
 - 所有代码与文档更新统一提交并推送到 `origin/master`；不使用 `beta` 作为日常开发或部署分支。
 - 修改后必须完整运行测试、检查 Git diff 和状态，推送后再让 6v/noha 都同步到同一个提交。
 - 不得自行修改 Codex 的登录凭据、会话数据库或运行中缓存；`.codex` 清理由独立审查结论和必要授权控制。
-- `models.txt` 是每台电脑本地的第三方模型精选文件，可以人工编辑，不得提交 Git、不得在升级时覆盖星标；隐藏的第三方模型仍可按完整 ID 路由。GPT 固定透传模型始终可选、不加入星标精选，也不能因精选缺失而被拒绝。
+- `models.txt` 是每台电脑本地的第三方模型精选文件，可以人工编辑，不得提交 Git、不得在升级时覆盖第三方星标；已不可发现或认证失效的第三方模型即使仍有星标也不能在模型目录显示，恢复后原星标继续生效；隐藏模型仍可按完整 ID 路由。GPT 固定透传模型始终可选，自动清理误留在精选表中的透传条目，也不能因精选缺失而被拒绝。
 - 官方直连 CMD 必须完全独立于 CMP 服务和目录，不能加入请求 CMP 的预检逻辑；切换脚本不得主动重启 CMP 或 Codex。
 - 只维护 `codex-switch/` 下的一套切换程序，两台电脑生成相同的官方/CMP 双配置，归档多余旧模板后不可恢复旧活动入口。
 - Keep the .codex top-level tidy with codex-switch/tidy_root.py after preview. Archive old root-level configurations and model lists, delete only orphaned state-temp files older than 7 days, never prune current caches, sessions, authentication, or databases.

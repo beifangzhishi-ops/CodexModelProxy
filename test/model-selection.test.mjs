@@ -55,6 +55,52 @@ test('manually selected stars survive refresh, new IDs append without overwritin
   });
 });
 
+test('favorites discard ChatGPT passthrough rows but retain CPA GPT models and existing stars', async () => {
+  await withSelectionFile((file) => {
+    const original = [
+      '# keep this hand-written comment',
+      '* ds/deepseek-flash',
+      '  chatgpt/gpt-6.1-sol',
+      '* chatgpt/gpt-6-astra',
+      '  gpt-6-sol',
+      '* cpa/gpt-6-sol',
+      '  kimi/kimi-k2.7-code',
+      '# end comment',
+      '',
+    ].join('\r\n');
+    fs.writeFileSync(file, original);
+    const discovered = ids(
+      'chatgpt/gpt-6.1-sol', 'gpt-6-sol',
+      'ds/deepseek-flash', 'cpa/gpt-6-sol', 'kimi/kimi-k2.7-code',
+    );
+    const selected = syncModelSelection(file, discovered, logger);
+    assert.deepEqual([...selected], ['ds/deepseek-flash', 'cpa/gpt-6-sol']);
+    const expected = [
+      '# keep this hand-written comment',
+      '* ds/deepseek-flash',
+      '* cpa/gpt-6-sol',
+      '  kimi/kimi-k2.7-code',
+      '# end comment',
+      '',
+    ].join('\r\n');
+    assert.equal(fs.readFileSync(file, 'utf8'), expected);
+    syncModelSelection(file, discovered, logger);
+    assert.equal(fs.readFileSync(file, 'utf8'), expected);
+  });
+});
+
+test('passthrough IDs never initialize favorites even if discovery reports them', async () => {
+  await withSelectionFile((file) => {
+    const selected = syncModelSelection(file, ids(
+      'chatgpt/gpt-6.1-sol', 'gpt-6-sol', 'ds/deepseek-flash',
+    ), logger);
+    assert.deepEqual([...selected], ['ds/deepseek-flash']);
+    const content = fs.readFileSync(file, 'utf8');
+    assert.match(content, /\* ds\/deepseek-flash/);
+    assert.doesNotMatch(content, /chatgpt\/|gpt-6-sol/);
+  });
+});
+
 test('when selected model is not discovered, fallback avoids an empty picker', async () => {
   await withSelectionFile((file) => {
     fs.writeFileSync(file, '* kimi/unavailable\n');
