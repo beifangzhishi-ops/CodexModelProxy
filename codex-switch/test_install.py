@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
 from pathlib import Path
 import os
 import shutil
@@ -9,6 +10,7 @@ import subprocess
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 
 
 FILE = Path(__file__).with_name("install.py")
@@ -68,6 +70,30 @@ class SwitchInstallerTests(unittest.TestCase):
             MODULE.install(home, project)
             self.assertEqual((home / "config_cmp.toml").read_text(encoding="utf-8"),
                              'model = "custom"\n')
+
+            with mock.patch.object(MODULE, "write_shortcuts") as create_shortcuts:
+                MODULE.install(home, project, create_shortcuts=True)
+                create_shortcuts.assert_called_once_with(home, project)
+
+    @unittest.skipUnless(os.name == "nt", "Windows shortcut creation requires Windows")
+    def test_shortcuts_live_in_project_root_and_keep_their_targets(self):
+        with tempfile.TemporaryDirectory(dir=FILE.parent.parent) as directory:
+            root = Path(directory)
+            home = root / ".codex"
+            project = root / "cmp"
+            home.mkdir()
+            project.mkdir()
+            with mock.patch.object(MODULE.subprocess, "run") as run:
+                MODULE.write_shortcuts(home, project)
+
+            command = run.call_args.args[0]
+            self.assertEqual(command[:3], ["powershell.exe", "-NoProfile", "-NonInteractive"])
+            script = base64.b64decode(command[-1]).decode("utf-16le")
+            for name in ("Codex-官方直连.lnk", "Codex-CMP模式.lnk", "CMP-模型精选.lnk"):
+                self.assertIn(str(project / name), script)
+            for target in (home / "官方直连.cmd", home / "CMP模式.cmd", project / "models.txt"):
+                self.assertIn(str(target), script)
+            self.assertNotIn(str(root / "Desktop"), script)
 
     @unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "Requires Windows PowerShell")
     def test_real_switcher_roundtrips_without_changing_mcp_configuration(self):

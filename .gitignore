@@ -10,3 +10,4 @@ proxy.err.log
 history-monitor.jsonl
 history-monitor.jsonl.1
 node_modules/
+*.lnk

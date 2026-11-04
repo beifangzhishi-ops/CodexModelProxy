@@ -139,8 +139,8 @@ def atomic_write(file: Path, data: str, *, newline: str = "") -> None:
             tmp.unlink()
 
 
-def write_shortcuts(home: Path, cmp_root: Path, desktop: Path) -> None:
-    if not desktop.is_dir() or os.name != "nt":
+def write_shortcuts(home: Path, cmp_root: Path) -> None:
+    if not cmp_root.is_dir() or os.name != "nt":
         return
     links = [
         ("Codex-官方直连.lnk", home / "官方直连.cmd", "", str(home)),
@@ -155,7 +155,7 @@ def write_shortcuts(home: Path, cmp_root: Path, desktop: Path) -> None:
     instructions = ["$w = New-Object -ComObject WScript.Shell"]
     for title, target, arguments, workdir in links:
         instructions += [
-            f"$s = $w.CreateShortcut({ps_quote(str(desktop / title))})",
+            f"$s = $w.CreateShortcut({ps_quote(str(cmp_root / title))})",
             f"$s.TargetPath = {ps_quote(str(target))}",
             f"$s.Arguments = {ps_quote(arguments)}",
             f"$s.WorkingDirectory = {ps_quote(workdir)}",
@@ -171,7 +171,7 @@ def write_shortcuts(home: Path, cmp_root: Path, desktop: Path) -> None:
         print("SHORTCUT_SETUP_WARNING", type(error).__name__)
 
 
-def install(home: Path, cmp_root: Path, desktop: Path | None = None) -> None:
+def install(home: Path, cmp_root: Path, *, create_shortcuts: bool = False) -> None:
     if not home.is_dir() or not (home / "config.toml").is_file():
         raise FileNotFoundError(f"Codex config directory not found: {home}")
     if not (cmp_root / "AGENTS.md").is_file():
@@ -231,8 +231,8 @@ def install(home: Path, cmp_root: Path, desktop: Path | None = None) -> None:
     )
     if not readme.exists() or "配置切换模板" in readme.read_text(encoding="utf-8-sig"):
         atomic_write(readme, documentation)
-    if desktop:
-        write_shortcuts(home, cmp_root, desktop)
+    if create_shortcuts:
+        write_shortcuts(home, cmp_root)
 
     print("OFFICIAL_PROFILE_READY", (home / "config_official.toml").is_file())
     print("CMP_PROFILE_READY", (home / "config_cmp.toml").is_file())
@@ -245,9 +245,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--codex-home", type=Path, default=Path.home() / ".codex")
     parser.add_argument("--cmp-root", type=Path, default=Path(__file__).resolve().parent.parent)
-    parser.add_argument("--desktop", type=Path, default=Path.home() / "Desktop")
     args = parser.parse_args()
-    install(args.codex_home.resolve(), args.cmp_root.resolve(), args.desktop.resolve())
+    install(args.codex_home.resolve(), args.cmp_root.resolve(), create_shortcuts=True)
     return 0
 
 

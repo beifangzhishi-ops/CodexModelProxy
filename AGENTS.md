@@ -23,4 +23,5 @@
 - `models.txt` 仅管理本机第三方模型精选，禁止提交 Git。只保留未确认失效的候选：成功模型目录已移除的型号或 Provider 明确拒绝授权（401/402/403）的所有条目须从文件删除；临时故障和未验证状态不得删行。其他有效星标、注释原样保留，恢复型号重新追加为未选中。GPT 透传固定可选、不进入精选文件，误留的透传行需自动清理；请求路由不依赖精选星标。
 - 官方直连 CMD 必须完全独立于 CMP 服务和目录，不能加入请求 CMP 的预检逻辑；切换脚本不得主动重启 CMP 或 Codex。
 - 只维护 `codex-switch/` 下的一套切换程序，两台电脑生成相同的官方/CMP 双配置，归档多余旧模板后不可恢复旧活动入口。
+- 官方直连、CMP 模式和模型精选三个快捷方式只放在 CMP 项目根目录，安装程序不得在桌面创建快捷方式；本机 `.lnk` 不提交 Git。
 - Keep the .codex top-level tidy with codex-switch/tidy_root.py after preview. Archive old root-level configurations and model lists, delete only orphaned state-temp files older than 7 days, never prune current caches, sessions, authentication, or databases.
