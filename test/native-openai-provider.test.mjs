@@ -96,3 +96,30 @@ test('CMP explicitly rejects WS upgrade with 426 so Codex can fall back to HTTP'
     await close(proxy);
   }
 });
+
+test('client aborts during WS upgrade do not terminate the CMP server', async () => {
+  const proxy = createProxyServer({
+    config: { providers: {} },
+    logger,
+    env: {},
+    systemProxyResolver: async () => ({ url: '', mode: 'direct' }),
+  });
+  const proxyUrl = await listen(proxy);
+  try {
+    const host = new URL(proxyUrl);
+    await Promise.all(Array.from({ length: 20 }, () => new Promise((resolve, reject) => {
+      const socket = net.connect(Number(host.port), host.hostname);
+      socket.on('error', () => resolve());
+      socket.on('close', () => resolve());
+      socket.on('connect', () => {
+        socket.write('GET /v1/responses HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n');
+        socket.destroy();
+      });
+    })));
+    // The live server must remain healthy after abrupt connection resets.
+    assert.equal((await fetch(`${proxyUrl}/healthz`)).status, 200);
+    assert.equal((await fetch(`${proxyUrl}/v1/models`)).status, 200);
+  } finally {
+    await close(proxy);
+  }
+});

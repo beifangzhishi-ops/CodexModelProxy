@@ -128,3 +128,4 @@ Node.js 24 可运行：在仓库根目录使用 `node --test --test-isolation=no
 - CMP 当前没有 Responses WebSocket 转发：对 Upgrade 明确返回 HTTP 426，Codex 可回退到 HTTP Responses。官方直连不经过 CMP，可以独立测试 WS。不要把“同一个原生 Provider”误认为“CMP 已经实现 WS”。
 - `codex-switch/install.py` 刷新管理中的模板和切换脚本，但不自动切换正在使用的 Codex；`switch_config.ps1` 只更新模型、认证和地址相关配置，保留插件、MCP 等其他设置，并在改写前备份原 `config.toml`。
 - CMP URL generation uses the current server authentication configuration (PROXY_ACCESS_TOKEN or proxy-config.json access_token), not stale Codex headers. With no server token, use the ordinary http://127.0.0.1:<port>/v1 URL.
+- CMP rejection of Responses WebSocket Upgrade returns HTTP 426; client abort/reset is handled on the detached socket so ECONNRESET cannot terminate the HTTP proxy. The built-in openai provider should then fall back to HTTP Responses; use a fresh Codex conversation after changing the active profile.
