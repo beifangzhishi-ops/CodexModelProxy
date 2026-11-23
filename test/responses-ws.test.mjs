@@ -65,6 +65,28 @@ async function sendTurn(ws, frame) {
   });
 }
 
+async function exchange(ws, frame, done) {
+  return new Promise((resolve, reject) => {
+    const events = [];
+    const timer = setTimeout(() => finish(new Error('Timed out waiting for Responses WS event')), 4000);
+    function finish(err, result) {
+      clearTimeout(timer);
+      ws.off('message', onMessage);
+      ws.off('error', onError);
+      if (err) reject(err);
+      else resolve(result);
+    }
+    function onError(err) { finish(err); }
+    function onMessage(raw) {
+      events.push(JSON.parse(raw.toString('utf8')));
+      if (done(events)) finish(null, events);
+    }
+    ws.on('message', onMessage);
+    ws.on('error', onError);
+    ws.send(JSON.stringify(frame));
+  });
+}
+
 test('ChatGPT Responses WS forwards full prewarm, generation, OAuth and continuation', async () => {
   const requests = [];
   const upstreamHeaders = [];
@@ -131,6 +153,91 @@ test('ChatGPT Responses WS forwards full prewarm, generation, OAuth and continua
     assert.equal(upstreamHeaders[0].authorization, 'Bearer test-oauth');
     assert.equal(upstreamHeaders[0]['chatgpt-account-id'], 'test-account');
     assert.equal(await healthStatus(proxyBase + '/healthz'), 200);
+  } finally {
+    client?.terminate();
+    for (const socket of wss.clients) socket.terminate();
+    wss.close();
+    await close(proxy);
+    await close(upstream);
+  }
+});
+
+test('Codex in-flight interrupt reaches its original native WS and next turn still works', async () => {
+  const forwarded = [];
+  let connections = 0;
+  const upstream = http.createServer();
+  const wss = new WebSocketServer({ server: upstream, path: '/responses' });
+  wss.on('connection', socket => {
+    connections += 1;
+    socket.on('message', raw => {
+      const frame = JSON.parse(raw.toString());
+      forwarded.push(frame);
+      if (frame.type === 'response.create') {
+        const id = `resp_interrupt_${forwarded.length}`;
+        socket.send(JSON.stringify({ type: 'response.created', response: { id } }));
+        if (frame.input === 'after interruption') {
+          socket.send(JSON.stringify({ type: 'response.completed', response: { id } }));
+        }
+      } else if (frame.type === 'response.interrupt') {
+        socket.send(JSON.stringify({ type: 'response.interrupt.accepted', response_id: frame.response_id }));
+        socket.send(JSON.stringify({ type: 'response.incomplete', response: {
+          id: frame.response_id, incomplete_details: { reason: 'interrupted' },
+        } }));
+      } else if (frame.type === 'response.steer') {
+        socket.send(JSON.stringify({ type: 'response.steer.accepted', steer: { id: 'steer_fixture' } }));
+      }
+    });
+  });
+  const upstreamBase = await listen(upstream);
+  const proxy = createProxyServer({
+    config: { providers: { chatgpt: {
+      enabled: true, auth_mode: 'openai_passthrough', protocol: 'responses', network: 'direct',
+      model_prefix: 'chatgpt/', base_url: upstreamBase, discover_models: false,
+      models: { 'gpt-interrupt-fixture': {} },
+    } } },
+    logger, env: {}, systemProxyResolver: async () => ({ url: '', mode: 'direct' }),
+  });
+  const proxyBase = await listen(proxy);
+  let client;
+  try {
+    client = await connect(proxyBase.replace('http:', 'ws:') + '/v1/responses', {
+      authorization: 'Bearer fixture-oauth',
+    });
+    const first = await exchange(client,
+      { type: 'response.create', model: 'gpt-interrupt-fixture', input: 'long turn' },
+      events => events.some(event => event.type === 'response.created'));
+    const id = first[0].response.id;
+
+    const rejected = await exchange(client,
+      { type: 'response.interrupt', response_id: 'resp_from_other_connection', mode: 'discard_partial_items' },
+      events => events.some(event => event.type === 'error'));
+    assert.equal(rejected[0].error.type, 'previous_response_not_found');
+    assert.equal(forwarded.length, 1, 'wrong response IDs must not reach an upstream');
+
+    const interrupted = await exchange(client,
+      { type: 'response.interrupt', response_id: id, mode: 'discard_partial_items' },
+      events => events.some(event => event.type === 'response.interrupt.accepted') &&
+        events.some(event => event.type === 'response.incomplete'));
+    assert.deepEqual(interrupted.map(x => x.type), ['response.interrupt.accepted', 'response.incomplete']);
+    assert.equal(interrupted[0].response_id, id);
+    assert.equal(interrupted[1].response.incomplete_details.reason, 'interrupted');
+    assert.deepEqual(forwarded[1], {
+      type: 'response.interrupt', response_id: id, mode: 'discard_partial_items',
+    });
+
+    const steer = await exchange(client,
+      { type: 'response.steer', previous_response_id: id, input: 'new direction' },
+      events => events.some(event => event.type === 'response.steer.accepted'));
+    assert.equal(steer[0].steer.id, 'steer_fixture');
+    assert.equal(forwarded[2].type, 'response.steer');
+    assert.equal(forwarded[2].previous_response_id, id);
+
+    const continued = await sendTurn(client, {
+      model: 'gpt-interrupt-fixture', previous_response_id: id, input: 'after interruption',
+    });
+    assert.deepEqual(continued.map(x => x.type), ['response.created', 'response.completed']);
+    assert.equal(forwarded[3].previous_response_id, id);
+    assert.equal(connections, 1, 'interrupt and continuation must reuse one upstream socket');
   } finally {
     client?.terminate();
     for (const socket of wss.clients) socket.terminate();

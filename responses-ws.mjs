@@ -48,7 +48,7 @@ function emit(socket, event) {
   return true;
 }
 
-function forwardNative({ client, frame, session, route, req, proxyForModel, selection, logger, secrets, env, closed }) {
+function forwardNative({ client, frame, session, route, req, proxyForModel, selection, logger, secrets, env, closed, onResponseCreated }) {
   const authMode = route.auth_mode || 'api_key';
   const headers = route.provider_id === 'chatgpt' ? upstreamHeaders(req) : {};
   if (authMode === 'openai_passthrough') {
@@ -103,7 +103,20 @@ function forwardNative({ client, frame, session, route, req, proxyForModel, sele
       }
     });
     upstream.on('message', (payload, binary) => {
-      if (!closed()) emit(client, binary ? payload : payload.toString('utf8'));
+      if (closed()) return;
+      const message = binary ? payload : payload.toString('utf8');
+      // Control frames omit the model and (usually) stream_id. Remember which
+      // upstream socket created each response so interrupts cannot be routed
+      // to a different provider or a newly opened connection.
+      if (!binary && message.includes('"response.created"')) {
+        try {
+          const event = JSON.parse(message);
+          if (event.type === 'response.created' && typeof event.response?.id === 'string') {
+            onResponseCreated(event.response.id);
+          }
+        } catch { /* Leave upstream payload and errors untouched. */ }
+      }
+      emit(client, message);
     });
     upstream.on('error', () => {
       if (!closed() && !failed) {
@@ -392,6 +405,7 @@ export function installResponsesWebsocketGateway(server, {
   wss.on('connection', (client, req) => {
     const sessions = new Map();
     const streams = new Map();
+    const responseSessions = new Map();
     let closed = false;
     const firstTimer = setTimeout(() => {
       if (!sessions.size && client.readyState === WebSocket.OPEN) client.close(1008, 'Missing response.create');
@@ -413,6 +427,7 @@ export function installResponsesWebsocketGateway(server, {
       }
       sessions.clear();
       streams.clear();
+      responseSessions.clear();
     }
     client.on('error', cleanUp);
     client.on('close', cleanUp);
@@ -425,7 +440,37 @@ export function installResponsesWebsocketGateway(server, {
       let frame;
       try { frame = JSON.parse(data.toString('utf8')); }
       catch { emitError(client, 'invalid_request_error', 'Malformed JSON', 400); return; }
+      if (frame && typeof frame === 'object' &&
+          (frame.type === 'response.interrupt' || frame.type === 'response.steer')) {
+        const id = frame.type === 'response.interrupt' ? frame.response_id : frame.previous_response_id;
+        if (typeof id !== 'string' || !id || id.length > 256) {
+          emitError(client, 'invalid_request_error', 'Invalid Responses WS control target', 400);
+          return;
+        }
+        if (frame.type === 'response.interrupt' && frame.mode !== 'discard_partial_items') {
+          emitError(client, 'invalid_request_error', 'Unsupported response.interrupt mode', 400);
+          return;
+        }
+        const session = responseSessions.get(id);
+        if (!session) {
+          emitError(client, 'previous_response_not_found', 'Responses WS control target is not on this connection', 400);
+          return;
+        }
+        // A control frame must reach the *original* live upstream WS. Never
+        // queue it for a replacement socket or synthesize an interrupt ack.
+        if (session.upstream?.readyState !== WebSocket.OPEN) {
+          emitError(client, 'upstream_error', 'Responses WS control target is no longer connected', 502);
+          return;
+        }
+        session.upstream.send(data.toString('utf8'), err => {
+          if (err && !closed) emitError(client, 'upstream_error', 'Responses WS control forwarding failed', 502);
+        });
+        return;
+      }
       if (!frame || typeof frame !== 'object' || frame.type !== 'response.create') {
+        const type = typeof frame?.type === 'string' && /^[a-z0-9._-]{1,64}$/i.test(frame.type)
+          ? frame.type : 'unknown';
+        logger.warn(`[codex-proxy] Unsupported Responses WS event type=${type}`);
         emitError(client, 'invalid_request_error', 'Unsupported Responses WS event', 400, frame?.stream_id);
         return;
       }
@@ -465,7 +510,15 @@ export function installResponsesWebsocketGateway(server, {
       }
       const route = selection.route;
       if (route.ws_transport === 'native') {
-        forwardNative({ client, frame, session, route, req, proxyForModel, selection, logger, secrets, env, closed: () => closed });
+        forwardNative({
+          client, frame, session, route, req, proxyForModel, selection, logger, secrets, env,
+          closed: () => closed,
+          onResponseCreated: id => {
+            responseSessions.delete(id);
+            responseSessions.set(id, session);
+            while (responseSessions.size > 128) responseSessions.delete(responseSessions.keys().next().value);
+          },
+        });
       } else {
         session.pending = session.pending.then(async () => {
           if (closed) return;
