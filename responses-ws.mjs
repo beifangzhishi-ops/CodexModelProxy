@@ -12,6 +12,7 @@ const MAX_MESSAGE = 64 * 1024 * 1024;
 const MAX_BUFFER = 8 * 1024 * 1024;
 const MAX_CONTEXT = 16 * 1024 * 1024;
 const MAX_STREAMS = 8;
+const MAX_ROUTE_SESSIONS = 32;
 const MAX_HISTORY = 12;
 
 function getHeader(req, key) {
@@ -159,6 +160,17 @@ function streamKey(frame) {
   if (frame.stream_id === undefined || frame.stream_id === null) return '__default__';
   if (!['string', 'number'].includes(typeof frame.stream_id)) throw new Error('Invalid stream id');
   return String(frame.stream_id);
+}
+
+// A model change on the same upstream must keep its WS continuation cache.
+// A provider, endpoint, transport, network or credential change must not
+// reuse that connection (or its authentication headers).
+function upstreamSessionKey(stream, route) {
+  return JSON.stringify([
+    stream, route.provider_id, route.upstream_base_url,
+    route.ws_transport, route.network, route.auth_mode,
+    route.api_key_env, route.api_key, route.provider_api_key,
+  ]);
 }
 
 function withStreamId(event, streamId) {
@@ -379,6 +391,7 @@ export function installResponsesWebsocketGateway(server, {
   });
   wss.on('connection', (client, req) => {
     const sessions = new Map();
+    const streams = new Map();
     let closed = false;
     const firstTimer = setTimeout(() => {
       if (!sessions.size && client.readyState === WebSocket.OPEN) client.close(1008, 'Missing response.create');
@@ -399,6 +412,7 @@ export function installResponsesWebsocketGateway(server, {
         session.upstream?.terminate();
       }
       sessions.clear();
+      streams.clear();
     }
     client.on('error', cleanUp);
     client.on('close', cleanUp);
@@ -426,27 +440,30 @@ export function installResponsesWebsocketGateway(server, {
           selection.status || 400, frame.stream_id);
         return;
       }
-      let session = sessions.get(key);
-      if (!session) {
-        if (sessions.size >= MAX_STREAMS) {
+      let stream = streams.get(key);
+      if (!stream) {
+        if (streams.size >= MAX_STREAMS) {
           emitError(client, 'invalid_request_error', 'Too many WS streams', 429, frame.stream_id);
           return;
         }
+        stream = { histories: new Map() };
+        streams.set(key, stream);
+      }
+      const sessionKey = upstreamSessionKey(key, selection.route);
+      let session = sessions.get(sessionKey);
+      if (!session) {
+        if (sessions.size >= MAX_ROUTE_SESSIONS) {
+          emitError(client, 'invalid_request_error', 'Too many WS upstream routes', 429, frame.stream_id);
+          return;
+        }
         session = {
-          route: selection.route, key, queue: [], histories: new Map(), pending: Promise.resolve(),
+          key, queue: [], histories: stream.histories, pending: Promise.resolve(),
           upstream: null, connecting: false, controller: new AbortController(),
         };
-        sessions.set(key, session);
+        sessions.set(sessionKey, session);
         clearTimeout(firstTimer);
-      } else if (
-        session.route.upstream_base_url !== selection.route.upstream_base_url ||
-        session.route.upstream_model !== selection.route.upstream_model ||
-        session.route.provider_id !== selection.route.provider_id
-      ) {
-        emitError(client, 'invalid_request_error', 'Cannot switch model within a WS stream', 400, frame.stream_id);
-        return;
       }
-      const route = session.route;
+      const route = selection.route;
       if (route.ws_transport === 'native') {
         forwardNative({ client, frame, session, route, req, proxyForModel, selection, logger, secrets, env, closed: () => closed });
       } else {

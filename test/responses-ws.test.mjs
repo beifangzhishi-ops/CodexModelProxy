@@ -93,7 +93,7 @@ test('ChatGPT Responses WS forwards full prewarm, generation, OAuth and continua
     config: { providers: { chatgpt: {
       enabled: true, auth_mode: 'openai_passthrough', protocol: 'responses', network: 'direct',
       model_prefix: 'chatgpt/', base_url: upstreamBase, discover_models: false,
-      models: { 'gpt-ws-fixture': {} },
+      models: { 'gpt-ws-fixture': {}, 'gpt-ws-other': {} },
     } } },
     logger, env: {}, systemProxyResolver: async () => ({ url: '', mode: 'direct' }),
   });
@@ -115,10 +115,18 @@ test('ChatGPT Responses WS forwards full prewarm, generation, OAuth and continua
       'response.created', 'response.output_item.done', 'response.completed',
     ]);
     assert.equal(response[1].item.content[0].text, 'OK');
-    assert.equal(requests.length, 2);
+    const switched = await sendTurn(client, {
+      model: 'gpt-ws-other', previous_response_id: 'resp_mock_2',
+      input: [{ role: 'user', content: 'switched model' }],
+    });
+    assert.equal(switched.at(-1).type, 'response.completed');
+    assert.equal(requests.length, 3);
     assert.equal(requests[0].generate, false);
     assert.equal(requests[1].previous_response_id, 'resp_mock_1');
     assert.equal(requests[0].model, 'gpt-ws-fixture');
+    assert.equal(requests[2].model, 'gpt-ws-other');
+    assert.equal(requests[2].previous_response_id, 'resp_mock_2');
+    // Same endpoint/authentication: switching models must reuse the WS.
     assert.equal(upstreamHeaders.length, 1);
     assert.equal(upstreamHeaders[0].authorization, 'Bearer test-oauth');
     assert.equal(upstreamHeaders[0]['chatgpt-account-id'], 'test-account');
@@ -129,6 +137,67 @@ test('ChatGPT Responses WS forwards full prewarm, generation, OAuth and continua
     wss.close();
     await close(proxy);
     await close(upstream);
+  }
+});
+
+test('model switching across native providers isolates upstream connections and credentials', async () => {
+  const connections = [];
+  const makeUpstream = label => {
+    const server = http.createServer();
+    const wss = new WebSocketServer({ server, path: '/responses' });
+    wss.on('connection', (socket, req) => {
+      connections.push({ label, headers: req.headers });
+      socket.on('message', raw => {
+        const frame = JSON.parse(raw.toString());
+        socket.send(JSON.stringify({ type: 'response.completed', response: {
+          id: `resp_${label}`, model: frame.model,
+        } }));
+      });
+    });
+    return { server, wss };
+  };
+  const a = makeUpstream('a');
+  const b = makeUpstream('b');
+  const urlA = await listen(a.server);
+  const urlB = await listen(b.server);
+  const proxy = createProxyServer({
+    config: { providers: {
+      chatgpt: {
+        enabled: true, auth_mode: 'openai_passthrough', protocol: 'responses',
+        network: 'direct', model_prefix: 'chatgpt/', base_url: urlA,
+        discover_models: false, models: { 'gpt-test-switch': {} },
+      },
+      third: {
+        enabled: true, auth_mode: 'api_key', api_key_env: 'OTHER_WS_KEY',
+        ws_transport: 'native', protocol: 'responses', network: 'direct',
+        model_prefix: 'other/', base_url: urlB,
+        discover_models: false, models: { 'other-switch': {} },
+      },
+    } },
+    logger, env: { OTHER_WS_KEY: 'third-party-only' },
+    systemProxyResolver: async () => ({ url: '', mode: 'direct' }),
+  });
+  const proxyBase = await listen(proxy);
+  let client;
+  try {
+    client = await connect(proxyBase.replace('http:', 'ws:') + '/v1/responses', {
+      authorization: 'Bearer oauth-only', 'chatgpt-account-id': 'private-account',
+    });
+    assert.equal((await sendTurn(client, { model: 'gpt-test-switch', input: 'one' })).at(-1).response.model, 'gpt-test-switch');
+    assert.equal((await sendTurn(client, { model: 'other/other-switch', input: 'two' })).at(-1).response.model, 'other-switch');
+    assert.equal((await sendTurn(client, { model: 'gpt-test-switch', input: 'three' })).at(-1).response.model, 'gpt-test-switch');
+    assert.deepEqual(connections.map(x => x.label), ['a', 'b']);
+    assert.equal(connections[0].headers.authorization, 'Bearer oauth-only');
+    assert.equal(connections[1].headers.authorization, 'Bearer third-party-only');
+    assert.equal(connections[1].headers['chatgpt-account-id'], undefined);
+  } finally {
+    client?.terminate();
+    for (const { wss, server } of [a, b]) {
+      for (const socket of wss.clients) socket.terminate();
+      wss.close();
+      await close(server);
+    }
+    await close(proxy);
   }
 });
 
@@ -166,7 +235,7 @@ test('third-party WS-to-HTTP bridge streams real SSE and reconstructs prior cont
       enabled: true, auth_mode: 'api_key', api_key_env: 'DS_TEST_KEY',
       protocol: 'responses', network: 'direct',
       model_prefix: 'ds/', base_url: upstreamBase, discover_models: false,
-      models: { 'ds-fixture': {} },
+      models: { 'ds-fixture': {}, 'ds-fixture-other': {} },
     } } },
     logger, env: { DS_TEST_KEY: 'third-party-test-token' },
     systemProxyResolver: async () => ({ url: '', mode: 'direct' }),
@@ -207,6 +276,14 @@ test('third-party WS-to-HTTP bridge streams real SSE and reconstructs prior cont
     assert.equal(seen[1].body.input.length, 4);
     assert.equal(seen[1].body.input[2].type, 'message');
     assert.equal(seen[1].body.input[3].type, 'function_call_output');
+    const switched = await sendTurn(client, {
+      model: 'ds/ds-fixture-other', stream_id: 'one',
+      previous_response_id: next.at(-1).response.id,
+      input: [{ role: 'user', content: 'new model, same context' }],
+    });
+    assert.equal(switched.at(-1).type, 'response.completed');
+    assert.equal(seen[2].body.model, 'ds-fixture-other');
+    assert.equal(seen[2].body.input.length, 6);
   } finally {
     client?.terminate();
     await close(proxy);
