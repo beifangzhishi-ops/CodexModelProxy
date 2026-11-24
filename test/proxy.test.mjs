@@ -9,7 +9,6 @@ import {
   createProxyServer,
   createUpstreamProxyResolver,
   loadConfig,
-  loadSecrets,
   parseDirectModels,
   resolveProxyUrl,
 } from '../server.mjs';
@@ -1112,7 +1111,7 @@ test('路由 tool_schema_compat 只接受 muse', () => {
     },
   }));
   try {
-    assert.throws(() => loadConfig(file), /tool_schema_compat 无效/);
+    assert.throws(() => loadConfig(file), /Obsolete configuration field: models/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1265,9 +1264,9 @@ test('上游错误状态、响应头和正文保持不变', async () => {
 });
 
 test('production config discovers GPT passthrough and third-party models without pinned inventories', () => {
-  const config = loadConfig();
+  const config = loadConfig(new URL('../proxy-config.json.example', import.meta.url), new URL('../model-overrides.json.example', import.meta.url));
   assert.equal(config.expose_canonical_models, false);
-  assert.deepEqual(Object.keys(config.models), []);
+  assert.deepEqual(Object.keys(config.models || {}), []);
   assert.deepEqual(Object.keys(config.aliases), []);
   assert.deepEqual(config.providers.chatgpt.models, {});
   for (const name of ['deepseek', 'opencode', 'zai', 'kimi']) {
@@ -1277,10 +1276,6 @@ test('production config discovers GPT passthrough and third-party models without
   assert.equal(config.providers.kimi.enabled, false);
   assert.equal(config.providers.chatgpt.auth_mode, 'openai_passthrough');
   assert.equal(config.providers.chatgpt.discover_models, true);
-});
-
-test('密钥文件缺失时返回空对象', () => {
-  assert.deepEqual(loadSecrets('./__missing_secrets_never_exists__.env'), {});
 });
 
 const dsReasoningFixture = {

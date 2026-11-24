@@ -12,8 +12,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { forwardCompact } from './compact-forward.mjs';
 import {
   normalizeResponsesBody,
-  isValidReasoningFormat,
-  isValidToolOutputFormat,
 } from './history-normalize.mjs';
 import {
   prepareMuseRequest,
@@ -26,19 +24,15 @@ import { createProxyAgent } from './proxy-agent.mjs';
 import { installResponsesWebsocketGateway } from './responses-ws.mjs';
 import {
   createProviderRegistry,
-  DEFAULT_PROVIDERS_FILE,
-  loadProviderFile,
-  loadRuntimeEnv,
-  parseEnvFile,
   resolveRouteApiKey,
 } from './provider-registry.mjs';
 import { resolveModelSelection as resolveRegistryModelSelection } from './model-resolver.mjs';
-import { deriveLegacyViews, sendModelList } from './model-catalog.mjs';
+import { sendModelList } from './model-catalog.mjs';
+import { loadConfig, DEFAULT_CONFIG_FILE } from './runtime-config.mjs';
+export { loadConfig };
 export { buildProviderCatalogModels } from './model-catalog.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_CONFIG_FILE = path.join(__dirname, 'proxy-config.json');
-const DEFAULT_SECRETS_FILE = path.join(__dirname, 'proxy-secrets.env');
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 600000;
 // Codex calls these provider-relative endpoints outside the Responses API.
@@ -147,7 +141,7 @@ export function createUpstreamProxyResolver({
 }) {
   const hasEnvOverride = env.PROXY_URL !== undefined;
   const configProxyUrl = String(config.proxy || '').trim();
-  const hasConfigOverride = !hasEnvOverride && configProxyUrl.length > 0;
+  const hasConfigOverride = !hasEnvOverride && Object.hasOwn(config, 'proxy');
   const fixedProxyUrl = hasEnvOverride ? String(env.PROXY_URL).trim() : configProxyUrl;
 
   return async (slug, networkPolicy = 'default') => {
@@ -165,98 +159,6 @@ export function createUpstreamProxyResolver({
   };
 }
 
-export function loadConfig(configFile = process.env.PROXY_CONFIG_FILE || DEFAULT_CONFIG_FILE) {
-  const resolvedConfigFile = path.resolve(configFile);
-  let raw;
-  try {
-    raw = fs.readFileSync(resolvedConfigFile, 'utf8');
-  } catch (err) {
-    throw new Error(`无法读取配置文件：${configFile}（${err.message}）`);
-  }
-  const config = JSON.parse(raw);
-  if (typeof config !== 'object' || config === null || Array.isArray(config)) {
-    throw new Error('proxy-config.json 顶层必须是对象');
-  }
-  if (config.models === undefined) config.models = {};
-  if (typeof config.models !== 'object' || Array.isArray(config.models)) {
-    throw new Error('proxy-config.json 的 models 必须是对象');
-  }
-  // 顶层 models 仅保留旧配置兼容；新配置应把连接与模型定义放到 providers。
-  for (const [slug, route] of Object.entries(config.models)) {
-    if (!route.upstream_base_url || typeof route.upstream_base_url !== 'string') {
-      throw new Error(`路由 ${slug} 缺少 upstream_base_url`);
-    }
-    if (!route.upstream_model || typeof route.upstream_model !== 'string') {
-      throw new Error(`路由 ${slug} 缺少 upstream_model`);
-    }
-    const authMode = route.auth_mode || 'api_key';
-    if (!['api_key', 'openai_passthrough'].includes(authMode)) {
-      throw new Error(`路由 ${slug} auth_mode 无效`);
-    }
-    if (authMode === 'api_key' && (!route.api_key_env || typeof route.api_key_env !== 'string')) {
-      throw new Error(`路由 ${slug} 缺少 api_key_env`);
-    }
-    if (!route.reasoning_format || !isValidReasoningFormat(route.reasoning_format)) {
-      throw new Error(`路由 ${slug} 缺少或无效的 reasoning_format`);
-    }
-    if (
-      route.tool_output_format !== undefined &&
-      !isValidToolOutputFormat(route.tool_output_format)
-    ) {
-      throw new Error(`路由 ${slug} 的 tool_output_format 无效`);
-    }
-    if (
-      route.tool_schema_compat !== undefined &&
-      !isValidToolSchemaCompat(route.tool_schema_compat)
-    ) {
-      throw new Error(`路由 ${slug} 的 tool_schema_compat 无效`);
-    }
-  }
-
-  // 新 Provider-native 配置不再维护重复的顶层 route/catalog。
-  // 为旧调用方保留一个派生只读视图；createProxyServer 会继续使用未派生的 Provider 配置。
-  if (
-    Object.keys(config.models).length === 0 &&
-    config.providers && typeof config.providers === 'object' && !Array.isArray(config.providers)
-  ) {
-    const providerNativeConfig = { ...config, models: {} };
-    delete providerNativeConfig.catalog;
-    delete providerNativeConfig.model_catalog_file;
-    delete providerNativeConfig.metadata_model_map;
-    const registry = createProviderRegistry({
-      config: providerNativeConfig,
-      localConfig: { providers: {} },
-      env: {},
-      secrets: {},
-      validateCredentials: false,
-    });
-    const legacyViews = deriveLegacyViews(registry);
-    config.models = legacyViews.models;
-    config.catalog = legacyViews.catalog;
-    Object.defineProperty(config, '__providerNativeConfig', {
-      value: providerNativeConfig,
-      enumerable: false,
-      configurable: false,
-      writable: false,
-    });
-  }
-  return config;
-}
-
-export function loadSecrets(secretsFile = process.env.PROXY_SECRETS_FILE || DEFAULT_SECRETS_FILE) {
-  let raw = '';
-  try {
-    raw = fs.readFileSync(secretsFile, 'utf8');
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      // 密钥文件不存在时允许纯环境变量注入，由启动时的缺失检查统一处理
-      return {};
-    }
-    throw new Error(`无法读取密钥文件：${secretsFile}（${err.message}）`);
-  }
-  return parseEnvFile(raw);
-}
-
 export function createProxyServer({
   config,
   secrets = {},
@@ -271,7 +173,7 @@ export function createProxyServer({
   validateProviderCredentials = false,
 }) {
   const routes = config.models || {};
-  const registryConfig = config.__providerNativeConfig || config;
+  const registryConfig = config;
   const accessToken = (env.PROXY_ACCESS_TOKEN || config.access_token || '').trim();
   const systemProxyResolver = configuredSystemProxyResolver || createWindowsSystemProxyResolver({ logger });
   let proxyForModel;
@@ -294,14 +196,22 @@ export function createProxyServer({
     ...registry.knownLegacySlugs(),
     ...registry.knownCanonicalModels(),
   ]);
-  const directModels = configuredDirectModels || parseDirectModels(env.DIRECT_MODELS, knownModels);
+  const directModels = configuredDirectModels || parseDirectModels(env.DIRECT_MODELS ?? config.direct_models, knownModels);
   proxyForModel = createUpstreamProxyResolver({ config, env, directModels, systemProxyResolver });
   const requireToken = accessToken.length > 0;
   // Codex's built-in `openai` provider supports openai_base_url but ignores
   // custom HTTP headers. Keep the existing local access control by accepting
   // a token in a private URL prefix (never forwarded upstream or logged).
   const urlAccessToken = requireToken ? Buffer.from(accessToken, 'utf8').toString('base64url') : '';
-  const historyMonitor = configuredHistoryMonitor || createHistoryMonitor({ env, logger });
+  const historyMonitor = configuredHistoryMonitor || createHistoryMonitor({
+    env: {
+      HISTORY_MONITOR: config.history_monitor,
+      HISTORY_MONITOR_FILE: config.history_monitor_file,
+      HISTORY_MONITOR_MAX_BYTES: config.history_monitor_max_bytes,
+      ...env,
+    },
+    logger,
+  });
 
   function isAuthorized(req, hasUrlToken = false) {
     if (!requireToken) return true;
@@ -981,14 +891,10 @@ function isMain() {
 }
 
 if (isMain()) {
-  const env = loadRuntimeEnv();
+  const env = process.env;
   let config;
-  let secrets;
-  let localConfig;
   try {
-    config = loadConfig(env.PROXY_CONFIG_FILE || DEFAULT_CONFIG_FILE);
-    secrets = loadSecrets(env.PROXY_SECRETS_FILE || DEFAULT_SECRETS_FILE);
-    localConfig = loadProviderFile(env.PROVIDERS_CONFIG_FILE || DEFAULT_PROVIDERS_FILE);
+    config = loadConfig(env.PROXY_CONFIG_FILE || DEFAULT_CONFIG_FILE, env.MODEL_OVERRIDES_FILE);
   } catch (err) {
     console.error(`[codex-proxy] 启动失败：${err.message}`);
     process.exit(1);
@@ -1001,12 +907,10 @@ if (isMain()) {
   try {
     server = createProxyServer({
       config,
-      secrets,
       env,
-      localConfig,
       validateProviderCredentials: true,
     });
-    directModels = server.directModels || parseDirectModels(env.DIRECT_MODELS, new Set([
+    directModels = server.directModels || parseDirectModels(env.DIRECT_MODELS ?? config.direct_models, new Set([
       ...Object.keys(config.models || {}),
       ...Object.keys(config.aliases || {}),
     ]));
@@ -1027,7 +931,7 @@ if (isMain()) {
     const configuredProxy = env.PROXY_URL !== undefined
       ? String(env.PROXY_URL).trim()
       : String(config.proxy || '').trim();
-    const defaultNetwork = env.PROXY_URL !== undefined
+    const defaultNetwork = env.PROXY_URL !== undefined || Object.hasOwn(config, 'proxy')
       ? (configuredProxy ? '固定代理' : '直连')
       : (configuredProxy ? '固定代理' : '动态 Windows 系统代理');
     console.log(`[codex-proxy] 上游网络：默认${defaultNetwork}；直连白名单：${[...directModels].join('、') || '(空)'}`);

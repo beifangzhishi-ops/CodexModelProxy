@@ -12,7 +12,7 @@ const logger = { info() {}, warn() {}, error() {} };
 
 test('ChatGPT model inventory comes only from authenticated discovery, not manually pinned names', async () => {
   const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const config = JSON.parse(fs.readFileSync(path.join(projectRoot, 'proxy-config.json'), 'utf8'));
+  const config = JSON.parse(fs.readFileSync(path.join(projectRoot, 'proxy-config.json.example'), 'utf8'));
   const chatgpt = config.providers.chatgpt;
   assert.deepEqual(chatgpt.models, {});
   let liveModels = [{ slug: 'gpt-6.2-sol' }, { slug: 'gpt-6.2-astra' }];

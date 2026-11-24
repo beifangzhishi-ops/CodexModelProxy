@@ -78,14 +78,11 @@ def active_cmp_model(home: Path, cmp_url: str, cmp_root: Path) -> str:
 
 
 def get_local_proxy_settings(cmp_root: Path) -> tuple[str, dict]:
-    env = {}
-    local = cmp_root / "proxy-local.env"
-    if local.exists():
-        for line in local.read_text(encoding="utf-8-sig").splitlines():
-            if "=" in line and not line.lstrip().startswith("#"):
-                key, value = line.split("=", 1)
-                env[key.strip()] = value.strip()
-    port = env.get("PORT", "8787")
+    proxy_config = Path(os.getenv("PROXY_CONFIG_FILE") or cmp_root / "proxy-config.json")
+    if not proxy_config.is_absolute():
+        proxy_config = cmp_root / proxy_config
+    configured = json.loads(proxy_config.read_text(encoding="utf-8-sig")) if proxy_config.is_file() else {}
+    port = str(os.getenv("PORT") or configured.get("port", 8787))
     if not port.isdigit() or not (1 <= int(port) <= 65535):
         raise ValueError("CMP PORT must be a valid TCP port")
     url = f"http://127.0.0.1:{port}/v1"
@@ -93,12 +90,9 @@ def get_local_proxy_settings(cmp_root: Path) -> tuple[str, dict]:
     # Only the server's current authentication configuration is authoritative.
     # Previous Codex templates may retain a stale access header even though
     # the running CMP has no access token; never promote that header into a URL.
-    access_token = env.get("PROXY_ACCESS_TOKEN") or os.getenv("PROXY_ACCESS_TOKEN")
+    access_token = os.getenv("PROXY_ACCESS_TOKEN")
     if not access_token:
-        proxy_config = cmp_root / "proxy-config.json"
-        if proxy_config.is_file():
-            configured = json.loads(proxy_config.read_text(encoding="utf-8-sig"))
-            access_token = configured.get("access_token")
+        access_token = configured.get("access_token")
     if access_token is None:
         access_token = ""
     if not isinstance(access_token, str):

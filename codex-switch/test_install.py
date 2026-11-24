@@ -27,7 +27,6 @@ class SwitchInstallerTests(unittest.TestCase):
             project = root / 'cmp'
             home.mkdir()
             project.mkdir()
-            (project / 'proxy-local.env').write_text('PORT=8787\n', encoding='utf-8')
             (project / 'proxy-config.json').write_text('{}\n', encoding='utf-8')
             (home / 'config.toml').write_text(
                 'model_provider = "OpenAI"\n'
@@ -58,8 +57,8 @@ class SwitchInstallerTests(unittest.TestCase):
             home.mkdir()
             project.mkdir()
             (project / "AGENTS.md").write_text("CMP rules", encoding="utf-8")
-            (project / "proxy-local.env").write_text(
-                "PORT=9777\nPROXY_ACCESS_TOKEN=local-test-token\n", encoding="utf-8",
+            (project / "proxy-config.json").write_text(
+                '{"port":9777,"access_token":"local-test-token"}', encoding="utf-8",
             )
             (project / "models.txt").write_text(
                 "* kimi/kimi-selected\n  ds/deepseek-flash\n", encoding="utf-8",
@@ -135,7 +134,6 @@ class SwitchInstallerTests(unittest.TestCase):
             home.mkdir()
             project.mkdir()
             (project / "AGENTS.md").write_text("CMP rules", encoding="utf-8")
-            (project / "proxy-local.env").write_text("PORT=8787\n", encoding="utf-8")
             original = (
                 'model_provider = "openai"\nmodel = "gpt-current"\n'
                 'model_reasoning_effort = "medium"\nforced_login_method = "chatgpt"\n'
@@ -191,7 +189,6 @@ class SwitchInstallerTests(unittest.TestCase):
             project.mkdir()
             (project / "AGENTS.md").write_text("CMP rules", encoding="utf-8")
             (project / "models.txt").write_text("* ds/deepseek-flash\n", encoding="utf-8")
-            (project / "proxy-local.env").write_text("PORT=8787\n", encoding="utf-8")
             old_case = "OpenAI"
             legacy_table = (
                 f'[model_providers.{old_case}]\nname = "OpenAI"\n'

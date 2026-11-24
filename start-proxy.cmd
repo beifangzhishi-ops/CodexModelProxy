@@ -13,13 +13,8 @@ if not exist "node_modules\ws\package.json" (
   exit /b 1
 )
 
-if not exist "proxy-secrets.env" if not exist "providers.local.json" (
-  echo [codex-proxy] ERROR: no local credentials found. Copy proxy-secrets.env.example or providers.local.json.example and fill the required keys.
-  exit /b 1
-)
-
-rem Read only the listener port through the same Node environment loader as server.mjs.
-for /f "delims=" %%P in ('node --input-type=module -e "import { loadRuntimeEnv } from './provider-registry.mjs'; console.log(loadRuntimeEnv().PORT || 8787)"') do set "PORT=%%P"
+rem Resolve listener settings using the same local configuration as server.mjs.
+for /f "delims=" %%P in ('node --input-type=module -e "import {loadConfig} from './runtime-config.mjs'; const e=process.env; console.log(Number(e.PORT) || loadConfig(e.PROXY_CONFIG_FILE,e.MODEL_OVERRIDES_FILE).port)"') do set "PORT=%%P"
 if not defined PORT set "PORT=8787"
 
 rem Already running?

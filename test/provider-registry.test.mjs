@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   createProviderRegistry,
-  loadRuntimeEnv,
   resolveRouteApiKey,
 } from '../provider-registry.mjs';
 import {
@@ -301,19 +300,4 @@ test('别名目标、别名循环和动态 Provider 校验', () => {
     } },
   });
   assert.equal(resolveModelSelection('foo/new-model', dynamic).ok, true);
-});
-
-test('本地环境文件由统一加载器读取，显式进程环境优先', () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-env-'));
-  const file = path.join(directory, 'proxy-local.env');
-  try {
-    fs.writeFileSync(file, 'PORT=1234\nexport HOST=127.0.0.1\nFROM_FILE=ok\n', 'utf8');
-    const env = loadRuntimeEnv({ env: { PORT: '5678', FROM_PROCESS: 'yes' }, envFile: file });
-    assert.equal(env.PORT, '5678');
-    assert.equal(env.HOST, '127.0.0.1');
-    assert.equal(env.FROM_FILE, 'ok');
-    assert.equal(env.FROM_PROCESS, 'yes');
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
 });

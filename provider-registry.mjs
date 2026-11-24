@@ -1,20 +1,14 @@
 // Provider Registry：集中管理 Provider 连接、静态模型、别名和认证来源。
 // 本模块不发起网络请求；模型发现由 model-discovery.mjs 负责。
 
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createModelDiscovery, createPassthroughModelDiscovery } from './model-discovery.mjs';
+import { mergeModelSpecs } from './model-metadata.mjs';
 import {
   isValidCompatibilityProfile,
   validateCompatibilityOverrides,
   validateRouteCompatibility,
 } from './compatibility-profiles.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-export const DEFAULT_PROVIDERS_FILE = path.join(__dirname, 'providers.local.json');
-export const DEFAULT_LOCAL_ENV_FILE = path.join(__dirname, 'proxy-local.env');
 export const SUPPORTED_AUTH_MODES = new Set(['api_key', 'openai_passthrough', 'none']);
 export const SUPPORTED_PROTOCOLS = new Set(['responses']);
 export const SUPPORTED_WS_TRANSPORTS = new Set(['native', 'http_bridge']);
@@ -26,66 +20,6 @@ const LEGACY_PROVIDER_KEY_ENV = Object.freeze({
   kimi: 'MOONSHOT_API_KEY',
   zai: 'ZAI_API_KEY',
 });
-
-export function parseEnvFile(raw) {
-  const values = {};
-  for (const sourceLine of String(raw || '').split(/\r?\n/)) {
-    let line = sourceLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    if (line.startsWith('export ')) line = line.slice('export '.length).trim();
-    const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!match) continue;
-    let value = match[2].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    values[match[1]] = value;
-  }
-  return values;
-}
-
-export function loadRuntimeEnv({
-  env = process.env,
-  envFile = env.PROXY_LOCAL_ENV_FILE || DEFAULT_LOCAL_ENV_FILE,
-} = {}) {
-  let fileValues = {};
-  try {
-    fileValues = parseEnvFile(fs.readFileSync(path.resolve(envFile), 'utf8'));
-  } catch (err) {
-    if (err.code !== 'ENOENT') {
-      throw new Error(`无法读取本地环境配置：${envFile}（${err.message}）`);
-    }
-  }
-  // process.env 是显式覆盖层；文件值只补充未设置的变量。
-  return { ...fileValues, ...env };
-}
-
-export function loadProviderFile(file = DEFAULT_PROVIDERS_FILE) {
-  let raw;
-  try {
-    raw = fs.readFileSync(path.resolve(file), 'utf8');
-  } catch (err) {
-    if (err.code === 'ENOENT') return { providers: {} };
-    throw new Error(`无法读取 Provider 配置：${file}（${err.message}）`);
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`Provider 配置 JSON 无效：${file}（${err.message}）`);
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`Provider 配置顶层必须是对象：${file}`);
-  }
-  if (parsed.providers === undefined) parsed.providers = {};
-  if (!parsed.providers || typeof parsed.providers !== 'object' || Array.isArray(parsed.providers)) {
-    throw new Error('Provider 配置的 providers 必须是对象');
-  }
-  return parsed;
-}
 
 export function resolveProviderApiKey(provider, env = {}, secrets = {}) {
   const envName = provider.api_key_env || provider.key_env || LEGACY_PROVIDER_KEY_ENV[provider.id];
@@ -154,7 +88,7 @@ export function validateProvider(providerId, raw, {
     throw new Error(`Provider ${id} invalid ws_transport: ${wsTransport}`);
   }
   if (enabled && !baseUrl && !allowMissingBaseUrl) {
-    throw new Error(`Provider ${id} 缺少 base_url；请在 providers.local.json 中填写 API 根地址`);
+    throw new Error(`Provider ${id} 缺少 base_url；请在 proxy-config.json 中填写 API 根地址`);
   }
   if (baseUrl) {
     let parsed;
@@ -169,7 +103,7 @@ export function validateProvider(providerId, raw, {
   }
   if (validateCredentials && enabled && authMode === 'api_key' && !resolvedApiKey) {
     const keyHint = raw.api_key_env || raw.key_env || LEGACY_PROVIDER_KEY_ENV[id] || '对应密钥字段';
-    throw new Error(`Provider ${id} 缺少 API key；请在 providers.local.json 填 api_key，或提供 ${keyHint}`);
+    throw new Error(`Provider ${id} 缺少 API key；请在 proxy-config.json 填 api_key，或提供 ${keyHint}`);
   }
   if (!isValidCompatibilityProfile(raw.compat_profile || 'passthrough')) {
     throw new Error(`Provider ${id} 字段 compat_profile 无效：${raw.compat_profile || '(空)'}`);
@@ -496,10 +430,12 @@ function mergeProvider(base, override) {
 }
 
 function mergeModelMaps(baseValue, overrideValue) {
-  return {
-    ...normalizeModelMap(baseValue),
-    ...normalizeModelMap(overrideValue),
-  };
+  const result = normalizeModelMap(baseValue);
+  for (const [name, spec] of Object.entries(normalizeModelMap(overrideValue))) {
+    const asSpec = (value) => typeof value === 'string' ? { upstream_model: value } : value;
+    result[name] = mergeModelSpecs(asSpec(result[name]), asSpec(spec));
+  }
+  return result;
 }
 
 function normalizeNamespace(raw, providerId) {
@@ -549,7 +485,7 @@ function normalizeModelSpec(modelName, raw, providerId) {
   if (spec.enabled === false) return { ...spec, upstream_model: spec.upstream_model || modelName };
   const upstreamModel = String(spec.upstream_model || modelName).trim();
   if (!upstreamModel) throw new Error(`Provider ${providerId} 模型 ${modelName} 缺少 upstream_model`);
-  return { ...spec, upstream_model: upstreamModel };
+  return spec.upstream_model === undefined ? spec : { ...spec, upstream_model: upstreamModel };
 }
 
 function normalizeModelOverrides(value, providerId) {

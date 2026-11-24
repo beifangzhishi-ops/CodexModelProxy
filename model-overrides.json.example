@@ -1,0 +1,29 @@
+{
+  "providers": {
+    "opencode": {
+      "muse-*": {
+        "metadata_profile": "muse",
+        "tool_schema_compat": "muse"
+      }
+    },
+    "deepseek": {
+      "deepseek-flash": {
+        "metadata": {
+          "use_responses_lite": false,
+          "tool_mode": null
+        }
+      }
+    },
+    "cpa": {
+      "gpt-*": {
+        "compat_profile": "openai"
+      },
+      "*codex*": {
+        "compat_profile": "openai"
+      },
+      "deepseek-*": {
+        "compat_profile": "deepseek"
+      }
+    }
+  }
+}

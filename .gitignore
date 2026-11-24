@@ -11,3 +11,6 @@ history-monitor.jsonl
 history-monitor.jsonl.1
 node_modules/
 *.lnk
+
+proxy-config.json
+model-overrides.json

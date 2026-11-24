@@ -19,7 +19,7 @@
       "models": {}
     },
     "opencode": {
-      "enabled": true,
+      "enabled": false,
       "base_url": "https://opencode.ai/zen/go/v1",
       "api_key_env": "OPENCODE_API_KEY",
       "auth_mode": "api_key",
@@ -31,15 +31,10 @@
       "network": "default",
       "display_name": "OC",
       "models": {},
-      "model_overrides": {
-        "muse-*": {
-          "metadata_profile": "muse",
-          "tool_schema_compat": "muse"
-        }
-      }
+      "api_key": ""
     },
     "deepseek": {
-      "enabled": true,
+      "enabled": false,
       "base_url": "https://api.deepseek.com",
       "api_key_env": "DEEPSEEK_API_KEY",
       "auth_mode": "api_key",
@@ -48,20 +43,13 @@
       "model_prefix": "ds/",
       "compat_profile": "deepseek",
       "metadata_profile": "deepseek",
-      "model_overrides": {
-        "deepseek-flash": {
-          "metadata": {
-            "use_responses_lite": false,
-            "tool_mode": null
-          }
-        }
-      },
       "network": "direct",
       "display_name": "DS",
-      "models": {}
+      "models": {},
+      "api_key": ""
     },
     "zai": {
-      "enabled": true,
+      "enabled": false,
       "base_url": "https://api.z.ai/api/v1",
       "api_key_env": "ZAI_API_KEY",
       "auth_mode": "api_key",
@@ -72,7 +60,8 @@
       "metadata_profile": "zai",
       "network": "default",
       "display_name": "ZAI",
-      "models": {}
+      "models": {},
+      "api_key": ""
     },
     "kimi": {
       "enabled": false,
@@ -86,25 +75,23 @@
       "metadata_profile": "generic",
       "network": "default",
       "display_name": "Kimi",
-      "models": {}
+      "models": {},
+      "api_key": ""
+    },
+    "cpa": {
+      "enabled": false,
+      "base_url": "",
+      "api_key_env": "CPA_API_KEY",
+      "auth_mode": "api_key",
+      "protocol": "responses",
+      "model_prefix": "cpa/",
+      "compat_profile": "openai-auto",
+      "display_name": "CPA",
+      "models": {},
+      "api_key": ""
     }
   },
   "aliases": {},
-  "compatibility_overrides": [
-    {
-      "provider": "cpa",
-      "model_pattern": "gpt-*",
-      "profile": "openai"
-    },
-    {
-      "provider": "cpa",
-      "model_pattern": "*codex*",
-      "profile": "openai"
-    },
-    {
-      "provider": "cpa",
-      "model_pattern": "deepseek-*",
-      "profile": "deepseek"
-    }
-  ]
+  "direct_models": [],
+  "history_monitor": false
 }

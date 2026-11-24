@@ -16,7 +16,7 @@
 - 进入项目先阅读 AGENTS.md 和 README.md；README 记录当前状态，AGENTS 记录规则。
 - 优先使用 Provider Registry、Model Discovery 和 Model Catalog 现有模块；删除已废弃的平行实现，而非添加新兼容包装。
 - 新增路由、认证和模型目录逻辑时，至少增加无计费的 mock HTTP 回归测试。
-- 本地 `providers.local.json`、`proxy-secrets.env`、`proxy-local.env` 不进入 Git，也不得覆盖两台电脑各自的实际密钥。
+- 本地 `proxy-config.json`, `model-overrides.json`、`models.txt` 不进入 Git，也不得覆盖两台电脑各自的实际密钥。
 
 ## 更新与推送
 - 先同步远端最新版本，再修改。

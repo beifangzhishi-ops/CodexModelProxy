@@ -3,9 +3,9 @@
 import {
   applyCompatibilityProfile,
   getCompatibilityProfile,
-  matchWildcard,
   resolveCompatibilityProfile,
 } from './compatibility-profiles.mjs';
+import { resolveModelSpec } from './model-metadata.mjs';
 
 export function parseModelReference(model) {
   const value = typeof model === 'string' ? model.trim() : '';
@@ -69,10 +69,7 @@ export function resolveModelSelection(model, registry) {
     if (!staticModel && !provider.discover_models) {
       return invalidModel(model, `Provider ${provider.id} 未配置模型：${canonicalReference.model}`);
     }
-    const modelSpec = {
-      ...resolveProviderModelOverride(provider, canonicalReference.model),
-      ...(staticModel?.spec || {}),
-    };
+    const modelSpec = resolveModelSpec(provider, canonicalReference.model, staticModel?.spec);
     let route = buildProviderRoute({
       provider,
       modelName: canonicalReference.model,
@@ -108,20 +105,6 @@ export function resolveModelSelection(model, registry) {
     };
   }
   return invalidModel(model);
-}
-
-function resolveProviderModelOverride(provider, modelName) {
-  const overrides = provider?.model_overrides;
-  if (!overrides || typeof overrides !== 'object') return {};
-  const exact = overrides[modelName] || overrides[`${provider.namespace}/${modelName}`];
-  if (exact !== undefined) return typeof exact === 'string' ? { upstream_model: exact } : { ...exact };
-  for (const [pattern, value] of Object.entries(overrides)) {
-    if (!matchWildcard(pattern, modelName) && !matchWildcard(pattern, `${provider.namespace}/${modelName}`)) {
-      continue;
-    }
-    return typeof value === 'string' ? { upstream_model: value } : { ...(value || {}) };
-  }
-  return {};
 }
 
 export function buildProviderRoute({

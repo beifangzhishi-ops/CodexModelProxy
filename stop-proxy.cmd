@@ -2,18 +2,12 @@
 setlocal
 cd /d "%~dp0"
 
-rem Load machine-local overrides (gitignored; may be absent)
-if exist "proxy-local.env" (
-  for /f "usebackq eol=# tokens=1,* delims==" %%A in ("proxy-local.env") do set "%%A=%%B"
-)
-
-rem Resolve port: PORT (from proxy-local.env) > proxy-config.json > 8787
-if not defined PORT (
-  for /f %%P in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Content -Raw -LiteralPath 'proxy-config.json' -ErrorAction SilentlyContinue | ConvertFrom-Json).port"') do set "PORT=%%P"
-)
+rem Resolve the configured PID file (the same path used by server.mjs).
+for /f "delims=" %%P in ('node --input-type=module -e "import {loadConfig} from './runtime-config.mjs'; const e=process.env; const c=loadConfig(e.PROXY_CONFIG_FILE,e.MODEL_OVERRIDES_FILE); console.log(c.pid_file)"') do set "PIDFILE=%%P"
+if not defined PIDFILE set "PIDFILE=proxy.pid"
+for /f "delims=" %%P in ('node --input-type=module -e "import {loadConfig} from './runtime-config.mjs'; const e=process.env; console.log(Number(e.PORT) || loadConfig(e.PROXY_CONFIG_FILE,e.MODEL_OVERRIDES_FILE).port)"') do set "PORT=%%P"
 if not defined PORT set "PORT=8787"
 
-set "PIDFILE=proxy.pid"
 if exist "%PIDFILE%" goto :bypid
 goto :byport
 

@@ -13,7 +13,7 @@ CMP 仅转发 Responses 请求、整理已知的历史字段格式，不提供 C
 | Kimi | `kimi/` | `https://api.moonshot.cn/v1` | `MOONSHOT_API_KEY` | 上游 `/models`、60 秒缓存；默认关闭 |
 | OpenCode | `oc/` | `https://opencode.ai/zen/go/v1` | `OPENCODE_API_KEY` | 上游 `/models`、60 秒缓存 |
 | Z.AI | `zai/` | `https://api.z.ai/api/v1` | `ZAI_API_KEY` | 上游 `/models`、60 秒缓存 |
-| CPA | `cpa/` | 本机 `providers.local.json` 指定 | 独立 API Key | 上游 `/models`、60 秒缓存 |
+| CPA | `cpa/` | 本机 `proxy-config.json` 指定 | 独立 API Key | 上游 `/models`、60 秒缓存 |
 
 * ChatGPT 和第三方模型均由上游目录自动发现，不维护固定版本名单。ChatGPT 目录独立于第三方精选文件 `models.txt`，上游 `display_name`、`context_window` 等元数据按原样映射；缺失字段仅为 Codex 目录格式补全，不代表真实能力已经验证。
 * 第三方模型目录成功结果在内存中保留 60 秒。超时、429、5xx 等临时故障沿用最近成功的模型目录，失败后 30 秒内不重复尝试，且不删除精选行。上游 `/models` 返回 401/402/403 时清除该 Provider 的旧缓存，并从 `models.txt` 删除该 Provider 的模型和星标；完整模型目录成功刷新却不再包含的型号，也从精选文件删除。恢复后重新发现的型号作为未选中条目追加。Codex App Server 另有模型目录缓存，菜单更新可能延迟。
@@ -23,10 +23,10 @@ CMP 仅转发 Responses 请求、整理已知的历史字段格式，不提供 C
 
 ## 配置与启动
 
-1. `proxy-config.json` 是可提交的 Provider 行为配置和统一路由规则。
-2. `providers.local.json`（参考 `providers.local.json.example`）用于本机覆盖 Provider URL、启用开关、CPA 地址及 Key 等配置，已被 Git 忽略。启用 Kimi 时在这里将 `kimi.enabled` 改为 `true`。
-3. 密钥可通过进程环境变量或 `proxy-secrets.env` 提供，所有真实 Key 只保存在本机，不提交到仓库。配置 Kimi 使用 `MOONSHOT_API_KEY`。
-4. `proxy-local.env` 管理本地监听、系统代理、访问令牌等选项。客户端访问本地服务地址 `http://127.0.0.1:8787/v1`。
+1. `proxy-config.json` 是本机配置（不进入 Git）。参考 `proxy-config.json.example` 设置服务参数、Provider 启用状态、上游地址、认证和 Provider 默认值。
+2. `model-overrides.json` 是唯一的模型手动覆写入口（不进入 Git），可参考 `model-overrides.json.example`。在 `providers.<Provider ID>.<模型名或通配符>` 下仅填写需要覆写的字段：`metadata` 用于模型目录能力，`compat_profile` 等用于实际请求路由。文件缺失或为空时不覆写自动发现。
+3. API Key 在本机 `proxy-config.json` 的 `providers.<Provider ID>.api_key` 中配置，也可由 `api_key_env` 指定的进程环境变量注入。禁止提交真实密钥。
+4. 在 `proxy-config.json` 中设置 `host`、`port`、`proxy`、`access_token`、`direct_models` 以及可选历史监控参数。省略 `proxy` 表示跟随系统代理，空字符串表示强制直连。修改配置后需重启 CMP。
 5. 运行 `start-proxy.cmd` 启动服务；`GET /healthz` 检查服务，`GET /v1/models` 查询动态目录。请求 Responses 时使用 `POST /v1/responses`，压缩使用 `POST /v1/responses/compact`。
 
 ### Codex 接入
@@ -118,8 +118,8 @@ Node.js 24 可运行：在仓库根目录使用 `node --test --test-isolation=no
 ## 自动发现的上下文元数据
 
 - 已启用的 Provider 默认通过上游 `/models` 自动发现模型；只有明确设置 `discover_models: false` 才禁用发现。第三方目录默认缓存 60 秒，失败冷却 30 秒；短暂故障沿用最近一次成功目录，认证/额度明确拒绝时清除旧目录。
-- Codex `/v1/models` 中的能力字段按 **基础默认值 → Provider metadata_profile 默认值 → 上游自动发现 → 手动 catalog 模板 → model_overrides / models.<模型名>.metadata** 的顺序合并；后者仅覆盖自己明确指定的字段，自动刷新不能反向修改手动覆写。
-- `proxy-config.json` 的 `providers.deepseek.model_overrides.deepseek-flash.metadata` 显式锁定 DeepSeek 官方 Codex 工具模式（`use_responses_lite: false`、`tool_mode: null`）；其他上游能发现的能力（例如上下文窗口）继续自动同步。
+- Codex 模型目录能力按基础默认值 → Provider 默认值 → 上游自动发现 → 手动覆写合并。通配符由宽到窄合并，再应用精确模型名；只覆盖明确指定的字段。目录和实际请求共用同一个解析器。
+- 可选的 `model-overrides.json.example` 提供 DS 原生 Codex 工具模式、Muse 工具兼容和 CPA 兼容模式的示例。自动发现及 Git 更新均不会修改本机手动覆写。
 - CMP 的 `/v1/models` 优先透传上游 `context_window`、`max_context_window`、`auto_compact_token_limit` 及其他 Codex 原生能力字段；同时支持发现响应的嵌套 `metadata`、`model_metadata` 和通用的 `context_length`。
 - 不把 `max_input_tokens` 或输出 token 上限当作模型的总上下文窗口；没有可信窗口数据时，不再把所有模型写死成 128k，相关字段保持缺省。
 - `max_context_window` 指允许配置覆盖的最大值，不等于 `context_window`。缺失时不会凭空赋值，非法或互相冲突的数值会被过滤。

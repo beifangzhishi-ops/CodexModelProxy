@@ -114,25 +114,23 @@ export function inferMetadataProfile(provider = {}) {
   }
 }
 
-export function resolveModelMetadataSpec(provider = {}, modelName, staticSpec = {}) {
+export function resolveModelSpec(provider = {}, modelName, staticSpec = {}) {
   const normalizedName = String(modelName || '').trim();
   const overrides = provider.model_overrides || {};
   const canonicalName = `${provider.namespace || provider.id}/${normalizedName}`;
   const exact = overrides[normalizedName] || overrides[canonicalName] || {};
-  let wildcard = {};
-  for (const [pattern, value] of Object.entries(overrides)) {
-    if (pattern === normalizedName || pattern === canonicalName) continue;
-    if (matchWildcard(pattern, normalizedName) || matchWildcard(pattern, canonicalName)) {
-      if (value && typeof value === 'object') wildcard = value;
-      break;
-    }
-  }
-  // A more specific manual override only replaces fields it actually sets.
-  // In particular, metadata objects must not shadow other manual defaults.
-  return mergeModelSpecs(mergeModelSpecs(wildcard, exact), staticSpec);
+  let spec = {};
+  const matches = Object.entries(overrides)
+    .filter(([pattern, value]) => pattern !== normalizedName && pattern !== canonicalName &&
+      value && typeof value === 'object' &&
+      (matchWildcard(pattern, normalizedName) || matchWildcard(pattern, canonicalName)))
+    .sort(([a], [b]) => a.replaceAll('*', '').length - b.replaceAll('*', '').length);
+  for (const [, value] of matches) spec = mergeModelSpecs(spec, value);
+  // Broad patterns first, then exact, then explicit static fields.
+  return mergeModelSpecs(mergeModelSpecs(spec, exact), staticSpec);
 }
 
-function mergeModelSpecs(base = {}, override = {}) {
+export function mergeModelSpecs(base = {}, override = {}) {
   const result = { ...base, ...(override || {}) };
   if (
     base?.metadata !== undefined || base?.model_metadata !== undefined ||
@@ -171,7 +169,7 @@ export function buildCatalogModel({
   if (!publicId) throw new Error('模型目录项缺少 id');
   if (!upstreamName) throw new Error(`模型 ${publicId} 缺少 upstream model`);
 
-  const spec = resolveModelMetadataSpec(provider, upstreamName, staticSpec);
+  const spec = resolveModelSpec(provider, upstreamName, staticSpec);
   const profileName = String(spec.metadata_profile || '').trim() || inferMetadataProfile(provider);
   if (!isValidMetadataProfile(profileName)) {
     throw new Error(
