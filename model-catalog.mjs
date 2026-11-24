@@ -42,15 +42,16 @@ export async function sendModelList(res, registry, sendJson, context = {}, selec
   }));
   const passthroughCatalog = [...fixedPassthrough].map(([modelName, live], index) => {
     const spec = registry.getConfiguredStaticModel(`${passthrough.model_prefix}${modelName}`)?.spec || {};
-    const source = mergeCatalogSources(findLegacyCatalogTemplate(registry.config, modelName, modelName), live);
+    const template = findLegacyCatalogTemplate(registry.config, modelName, modelName);
     return buildCatalogModel({
       id: modelName,
       modelName,
       provider: passthrough,
-      source,
+      source: live || {},
+      template,
       staticSpec: spec,
       priority: index + 1,
-      displayName: live?.display_name || spec.display_name || source.display_name || modelName,
+      displayName: live?.display_name || modelName,
     });
   });
   const thirdPartyDynamic = dynamicModels.filter((model) => model.provider_id !== passthrough?.id || !hasPassthrough);
@@ -83,7 +84,8 @@ export async function sendModelList(res, registry, sendJson, context = {}, selec
       id: model.id,
       modelName: upstreamModel,
       provider,
-      source: mergeCatalogSources(legacyTemplate, model),
+      source: model,
+      template: legacyTemplate,
       staticSpec,
       priority: publicCatalog.length + index + 1,
       displayName: `${providerLabel} · ${model.name || model.display_name || upstreamModel}`,
@@ -196,7 +198,8 @@ export function buildProviderCatalogModels(dynamicModels, baseCatalog = [], prio
       id: model.id,
       modelName: upstreamModel,
       provider,
-      source: mergeCatalogSources(legacyTemplate, model),
+      source: model,
+      template: legacyTemplate,
       priority: priorityStart + index + 1,
       displayName: `${model.provider_label || provider.display_name || providerId} · ${upstreamModel}`,
     });
@@ -219,7 +222,7 @@ function buildCatalogForSelection(id, selection, registry, priority, displayName
     id,
     modelName,
     provider,
-    source: legacyTemplate,
+    template: legacyTemplate,
     staticSpec,
     priority,
     displayName,
@@ -238,14 +241,4 @@ function findLegacyCatalogTemplate(config, publicId, upstreamModel) {
   if (templates.has(upstreamModel)) return templates.get(upstreamModel);
   const mapped = config.metadata_model_map?.[publicId] || config.metadata_model_map?.[upstreamModel];
   return mapped && templates.has(mapped) ? templates.get(mapped) : {};
-}
-
-function mergeCatalogSources(legacyTemplate, discovered) {
-  const legacy = legacyTemplate && typeof legacyTemplate === 'object' ? legacyTemplate : {};
-  const live = discovered && typeof discovered === 'object' ? discovered : {};
-  const merged = { ...legacy, ...live };
-  if (legacy.model_messages && live.model_messages) {
-    merged.model_messages = { ...legacy.model_messages, ...live.model_messages };
-  }
-  return merged;
 }

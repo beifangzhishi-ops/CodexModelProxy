@@ -23,6 +23,176 @@ function provider(overrides = {}) {
   };
 }
 
+test('discovered capabilities win over defaults, while manual metadata and names win over discovery', () => {
+  const discovered = {
+    context_window: 1048576,
+    max_output_tokens: 32768,
+    tool_mode: 'native-upstream-mode',
+    use_responses_lite: false,
+    supports_parallel_tool_calls: false,
+    display_name: 'Upstream name',
+    model_messages: { instructions_template: 'Upstream instructions', custom_field: 'discovered' },
+  };
+  const dynamic = buildCatalogModel({
+    id: 'oc/autodetect',
+    modelName: 'autodetect',
+    provider: provider(),
+    source: discovered,
+  });
+  assert.equal(dynamic.tool_mode, 'native-upstream-mode');
+  assert.equal(dynamic.use_responses_lite, false);
+  assert.equal(dynamic.supports_parallel_tool_calls, false);
+  assert.equal(dynamic.context_window, 1048576);
+
+  const manual = buildCatalogModel({
+    id: 'oc/autodetect',
+    modelName: 'autodetect',
+    provider: provider({
+      model_overrides: {
+        autodetect: { display_name: 'Pinned model name', metadata: { use_responses_lite: true } },
+      },
+    }),
+    source: discovered,
+    template: {
+      context_window: 262144,
+      tool_mode: 'manual-template-mode',
+      model_messages: { instructions_template: 'Manual instructions' },
+    },
+    displayName: 'OC · Upstream name',
+  });
+  assert.equal(manual.use_responses_lite, true);
+  assert.equal(manual.tool_mode, 'manual-template-mode');
+  assert.equal(manual.context_window, 262144);
+  assert.equal(manual.max_output_tokens, 32768);
+  assert.equal(manual.display_name, 'Pinned model name');
+  assert.equal(manual.model_messages.instructions_template, 'Manual instructions');
+  assert.equal(manual.model_messages.custom_field, 'discovered');
+});
+
+test('explicit DeepSeek model overrides remain authoritative when discovery contradicts defaults', () => {
+  const discovered = {
+    use_responses_lite: true, tool_mode: 'code_mode_only', context_window: 1048576,
+  };
+  const model = buildCatalogModel({
+    id: 'ds/deepseek-flash',
+    modelName: 'deepseek-flash',
+    provider: provider({
+      id: 'deepseek',
+      namespace: 'ds',
+      metadata_profile: 'deepseek',
+      model_overrides: {
+        'deepseek-flash': {
+          metadata: { use_responses_lite: false, tool_mode: null },
+        },
+      },
+    }),
+    source: discovered,
+  });
+  assert.equal(model.use_responses_lite, false);
+  assert.equal(model.tool_mode, null);
+  assert.equal(model.context_window, 1048576);
+});
+
+test('wildcard, exact and static model metadata override only their specified fields', () => {
+  const model = buildCatalogModel({
+    id: 'oc/model-one',
+    modelName: 'model-one',
+    provider: provider({
+      model_overrides: {
+        'model-*': {
+          metadata: { use_responses_lite: false, supports_parallel_tool_calls: false },
+        },
+        'model-one': { metadata: { tool_mode: null } },
+      },
+    }),
+    staticSpec: { metadata: { context_window: 262144 } },
+    source: {
+      use_responses_lite: true, supports_parallel_tool_calls: true,
+      tool_mode: 'upstream-native', context_window: 1048576,
+      max_output_tokens: 10000,
+    },
+  });
+  assert.equal(model.use_responses_lite, false);
+  assert.equal(model.supports_parallel_tool_calls, false);
+  assert.equal(model.tool_mode, null);
+  assert.equal(model.context_window, 262144);
+  assert.equal(model.max_output_tokens, 10000);
+});
+
+test('live /v1/models retains manual overlays without losing unrelated discovered fields', async () => {
+  const server = createProxyServer({
+    config: {
+      providers: {
+        deepseek: {
+          enabled: true,
+          base_url: 'http://127.0.0.1:1',
+          auth_mode: 'api_key',
+          protocol: 'responses',
+          model_prefix: 'ds/',
+          metadata_profile: 'deepseek',
+          // discover_models deliberately omitted: auto-discovery is default.
+          model_overrides: {
+            'deepseek-flash': {
+              display_name: 'Manually pinned name',
+              metadata: { use_responses_lite: false, tool_mode: null },
+            },
+          },
+          models: {
+            'deepseek-flash': { metadata: { context_window: 262144 } },
+          },
+        },
+      },
+      catalog: {
+        models: [{ slug: 'ds/deepseek-flash', max_output_tokens: 8192 }],
+      },
+    },
+    env: { DEEPSEEK_API_KEY: 'fixture-only' },
+    logger: silentLogger,
+    systemProxyResolver: async () => ({ url: '', mode: 'direct' }),
+    discoveryFetchModels: async () => ({
+      data: [
+        {
+          id: 'deepseek-flash',
+          name: 'Upstream model name',
+          tool_mode: 'code_mode_only',
+          use_responses_lite: true,
+          context_window: 1048576,
+          max_output_tokens: 65536,
+          input_modalities: ['text', 'image'],
+        },
+        {
+          id: 'deepseek-new',
+          tool_mode: 'upstream-native-mode',
+          use_responses_lite: true,
+          context_window: 500000,
+        },
+      ],
+    }),
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/models`);
+    assert.equal(response.status, 200);
+    const { models } = await response.json();
+    const bySlug = new Map(models.map((model) => [model.slug, model]));
+    const pinned = bySlug.get('ds/deepseek-flash');
+    assert.ok(pinned);
+    assert.equal(pinned.tool_mode, null);
+    assert.equal(pinned.use_responses_lite, false);
+    assert.equal(pinned.context_window, 262144);
+    assert.equal(pinned.max_output_tokens, 8192);
+    assert.deepEqual(pinned.input_modalities, ['text', 'image']);
+    assert.equal(pinned.display_name, 'Manually pinned name');
+    const automatic = bySlug.get('ds/deepseek-new');
+    assert.ok(automatic);
+    assert.equal(automatic.tool_mode, 'upstream-native-mode');
+    assert.equal(automatic.use_responses_lite, true);
+    assert.equal(automatic.context_window, 500000);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('DeepSeek Codex catalog uses native Responses tool mode without changing generic providers', async () => {
   const dsProvider = provider({
     id: 'deepseek',

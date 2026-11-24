@@ -30,6 +30,27 @@ function validProvider(overrides = {}) {
   };
 }
 
+test('model discovery defaults to on but explicit opt-out remains authoritative', async () => {
+  const implicit = validProvider({ discover_models: undefined, models: {} });
+  const disabled = validProvider({ discover_models: false, models: {} });
+  const registry = createProviderRegistry({
+    config: {
+      providers: {
+        foo: implicit,
+        bar: { ...disabled, model_prefix: 'bar/' },
+      },
+    },
+    discoveryFetchModels: async (provider) => ({
+      data: [{ id: `autodiscovered-${provider.id}` }],
+    }),
+  });
+  assert.equal(registry.getProvider('foo').discover_models, true);
+  assert.equal(registry.getProvider('bar').discover_models, false);
+  assert.deepEqual((await registry.discoverAll()).map((model) => model.id), [
+    'foo/autodiscovered-foo',
+  ]);
+});
+
 test('有效 Provider、静态模型和别名可以构建并解析', () => {
   const registry = createProviderRegistry({
     config: {

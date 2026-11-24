@@ -57,6 +57,14 @@
       "model_prefix": "ds/",
       "compat_profile": "deepseek",
       "metadata_profile": "deepseek",
+      "model_overrides": {
+        "deepseek-flash": {
+          "metadata": {
+            "use_responses_lite": false,
+            "tool_mode": null
+          }
+        }
+      },
       "network": "direct",
       "display_name": "DS",
       "models": {}

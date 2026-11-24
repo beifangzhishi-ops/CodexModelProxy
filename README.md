@@ -117,6 +117,9 @@ Node.js 24 可运行：在仓库根目录使用 `node --test --test-isolation=no
 
 ## 自动发现的上下文元数据
 
+- 已启用的 Provider 默认通过上游 `/models` 自动发现模型；只有明确设置 `discover_models: false` 才禁用发现。第三方目录默认缓存 60 秒，失败冷却 30 秒；短暂故障沿用最近一次成功目录，认证/额度明确拒绝时清除旧目录。
+- Codex `/v1/models` 中的能力字段按 **基础默认值 → Provider metadata_profile 默认值 → 上游自动发现 → 手动 catalog 模板 → model_overrides / models.<模型名>.metadata** 的顺序合并；后者仅覆盖自己明确指定的字段，自动刷新不能反向修改手动覆写。
+- `proxy-config.json` 的 `providers.deepseek.model_overrides.deepseek-flash.metadata` 显式锁定 DeepSeek 官方 Codex 工具模式（`use_responses_lite: false`、`tool_mode: null`）；其他上游能发现的能力（例如上下文窗口）继续自动同步。
 - CMP 的 `/v1/models` 优先透传上游 `context_window`、`max_context_window`、`auto_compact_token_limit` 及其他 Codex 原生能力字段；同时支持发现响应的嵌套 `metadata`、`model_metadata` 和通用的 `context_length`。
 - 不把 `max_input_tokens` 或输出 token 上限当作模型的总上下文窗口；没有可信窗口数据时，不再把所有模型写死成 128k，相关字段保持缺省。
 - `max_context_window` 指允许配置覆盖的最大值，不等于 `context_window`。缺失时不会凭空赋值，非法或互相冲突的数值会被过滤。

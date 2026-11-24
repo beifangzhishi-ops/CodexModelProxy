@@ -116,23 +116,36 @@ export function inferMetadataProfile(provider = {}) {
 
 export function resolveModelMetadataSpec(provider = {}, modelName, staticSpec = {}) {
   const normalizedName = String(modelName || '').trim();
-  let override = {};
   const overrides = provider.model_overrides || {};
-  const exact = overrides[normalizedName] || overrides[`${provider.namespace || provider.id}/${normalizedName}`];
-  if (exact && typeof exact === 'object') {
-    override = exact;
-  } else {
-    for (const [pattern, value] of Object.entries(overrides)) {
-      if (
-        matchWildcard(pattern, normalizedName) ||
-        matchWildcard(pattern, `${provider.namespace || provider.id}/${normalizedName}`)
-      ) {
-        if (value && typeof value === 'object') override = value;
-        break;
-      }
+  const canonicalName = `${provider.namespace || provider.id}/${normalizedName}`;
+  const exact = overrides[normalizedName] || overrides[canonicalName] || {};
+  let wildcard = {};
+  for (const [pattern, value] of Object.entries(overrides)) {
+    if (pattern === normalizedName || pattern === canonicalName) continue;
+    if (matchWildcard(pattern, normalizedName) || matchWildcard(pattern, canonicalName)) {
+      if (value && typeof value === 'object') wildcard = value;
+      break;
     }
   }
-  return { ...override, ...(staticSpec || {}) };
+  // A more specific manual override only replaces fields it actually sets.
+  // In particular, metadata objects must not shadow other manual defaults.
+  return mergeModelSpecs(mergeModelSpecs(wildcard, exact), staticSpec);
+}
+
+function mergeModelSpecs(base = {}, override = {}) {
+  const result = { ...base, ...(override || {}) };
+  if (
+    base?.metadata !== undefined || base?.model_metadata !== undefined ||
+    override?.metadata !== undefined || override?.model_metadata !== undefined
+  ) {
+    result.metadata = mergeMetadata(
+      normalizeMetadataObject(base?.model_metadata),
+      normalizeMetadataObject(base?.metadata),
+      normalizeMetadataObject(override?.model_metadata),
+      normalizeMetadataObject(override?.metadata),
+    );
+  }
+  return result;
 }
 
 export function hasRequiredInstructions(model) {
@@ -148,6 +161,7 @@ export function buildCatalogModel({
   modelName,
   provider = {},
   source = {},
+  template = {},
   staticSpec = {},
   priority = 1,
   displayName,
@@ -166,11 +180,16 @@ export function buildCatalogModel({
   }
 
   const sourceMetadata = extractDiscoveryMetadata(source);
+  const templateMetadata = extractDiscoveryMetadata(template);
   const explicitMetadata = normalizeMetadataObject(spec.metadata || spec.model_metadata, publicId);
+  // Profiles are fallbacks, not explicit per-field overrides. Prefer real
+  // discovered capabilities, then apply legacy/manual model overrides. A
+  // new /models refresh must never displace explicitly configured fields.
   const merged = mergeMetadata(
     BASE_METADATA,
     METADATA_PROFILES[profileName],
     sourceMetadata,
+    templateMetadata,
     explicitMetadata,
   );
 
@@ -178,12 +197,15 @@ export function buildCatalogModel({
 
   merged.slug = publicId;
   merged.display_name = String(
-    displayName ||
     spec.display_name ||
+    explicitMetadata.display_name ||
+    templateMetadata.display_name ||
+    displayName ||
     sourceMetadata.display_name ||
     `${provider.display_name || provider.id || 'Provider'} · ${upstreamName}`,
   );
-  merged.description = spec.description ?? sourceMetadata.description ?? merged.description;
+  merged.description = spec.description ?? explicitMetadata.description ??
+    templateMetadata.description ?? sourceMetadata.description ?? merged.description;
   merged.priority = priority;
 
   // Codex 0.153.1+ 会拒绝整份目录，只要任意模型同时缺少这两个字段。

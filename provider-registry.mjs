@@ -200,7 +200,9 @@ export function validateProvider(providerId, raw, {
     auth_mode: authMode,
     protocol,
     ws_transport: wsTransport,
-    discover_models: raw.discover_models === true,
+    // Discovery is opt-out for a configured Provider. Explicit false stays
+    // authoritative, including legacy/static providers.
+    discover_models: raw.discover_models !== false,
     model_prefix: `${namespace}/`,
     namespace,
     compat_profile: raw.compat_profile || 'passthrough',
