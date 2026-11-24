@@ -61,6 +61,10 @@ const METADATA_PROFILES = Object.freeze({
   deepseek: {
     support_verbosity: false,
     default_verbosity: null,
+    // DeepSeek's native Codex integration uses standard Responses tools,
+    // not the Responses Lite / code-mode-only additional_tools format.
+    use_responses_lite: false,
+    tool_mode: null,
   },
   muse: {
     input_modalities: ['text', 'image'],

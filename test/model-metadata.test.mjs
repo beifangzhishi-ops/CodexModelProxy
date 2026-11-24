@@ -23,6 +23,65 @@ function provider(overrides = {}) {
   };
 }
 
+test('DeepSeek Codex catalog uses native Responses tool mode without changing generic providers', async () => {
+  const dsProvider = provider({
+    id: 'deepseek',
+    namespace: 'ds',
+    model_prefix: 'ds/',
+    metadata_profile: 'deepseek',
+  });
+  const ds = buildCatalogModel({
+    id: 'ds/deepseek-flash',
+    modelName: 'deepseek-flash',
+    provider: dsProvider,
+  });
+  const generic = buildCatalogModel({
+    id: 'oc/example',
+    modelName: 'example',
+    provider: provider(),
+  });
+  assert.equal(ds.use_responses_lite, false);
+  assert.equal(ds.tool_mode, null);
+  assert.equal(ds.apply_patch_tool_type, 'freeform');
+  assert.equal(generic.use_responses_lite, true);
+  assert.equal(generic.tool_mode, 'code_mode_only');
+
+  const server = createProxyServer({
+    config: {
+      expose_canonical_models: true,
+      providers: {
+        deepseek: {
+          enabled: true,
+          base_url: 'http://127.0.0.1:1',
+          auth_mode: 'api_key',
+          protocol: 'responses',
+          discover_models: false,
+          model_prefix: 'ds/',
+          compat_profile: 'deepseek',
+          metadata_profile: 'deepseek',
+          models: { 'deepseek-flash': {} },
+        },
+      },
+    },
+    env: { DEEPSEEK_API_KEY: 'fixture-only' },
+    logger: silentLogger,
+    systemProxyResolver: async () => ({ url: '', mode: 'direct' }),
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/models`);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    const catalog = payload.models.find((entry) => entry.slug === 'ds/deepseek-flash');
+    assert.ok(catalog);
+    assert.equal(catalog.use_responses_lite, false);
+    assert.equal(catalog.tool_mode, null);
+    assert.equal(catalog.apply_patch_tool_type, 'freeform');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('未知动态模型始终满足 Codex 0.153.1 的 instruction 要求', () => {
   const model = buildCatalogModel({
     id: 'oc/minimax-m3',
