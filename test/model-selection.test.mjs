@@ -10,11 +10,13 @@ import { resolveModelSelection } from '../model-resolver.mjs';
 
 const logger = { info() {}, warn() {}, error() {} };
 
-test('released GPT-6.2 Sol remains in the real ChatGPT passthrough catalog without request OAuth', async () => {
+test('ChatGPT model inventory comes only from authenticated discovery, not manually pinned names', async () => {
   const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const config = JSON.parse(fs.readFileSync(path.join(projectRoot, 'proxy-config.json'), 'utf8'));
   const chatgpt = config.providers.chatgpt;
-  assert.ok(Object.hasOwn(chatgpt.models, 'gpt-6.2-sol'));
+  assert.deepEqual(chatgpt.models, {});
+  let liveModels = [{ slug: 'gpt-6.2-sol' }, { slug: 'gpt-6.2-astra' }];
+  let upstreamCalls = 0;
   const registry = createProviderRegistry({
     config: { providers: { chatgpt } },
     localConfig: { providers: {} },
@@ -22,16 +24,74 @@ test('released GPT-6.2 Sol remains in the real ChatGPT passthrough catalog witho
     secrets: {},
     logger,
     validateCredentials: false,
-    discoveryFetchModels: async () => ({ models: [{ slug: 'gpt-6.2-sol' }] }),
+    discoveryFetchModels: async () => {
+      upstreamCalls += 1;
+      return { models: liveModels };
+    },
   });
-  let catalog;
+  const getCatalog = async (context = {}) => {
+    let result;
+    await sendModelList({}, registry, (_, status, body) => {
+      assert.equal(status, 200);
+      result = body;
+    }, context);
+    return result;
+  };
+  assert.deepEqual((await getCatalog()).models, []);
+  assert.equal(upstreamCalls, 0);
+  const authenticated = await getCatalog({ authorization: 'Bearer fixture-account' });
+  assert.deepEqual(authenticated.models.map((m) => m.slug), ['gpt-6.2-sol', 'gpt-6.2-astra']);
+  assert.deepEqual(authenticated.data.map((m) => m.id), ['gpt-6.2-sol', 'gpt-6.2-astra']);
+  liveModels = [{ slug: 'gpt-6.3-sol' }];
+  const refreshed = await getCatalog({ authorization: 'Bearer fixture-account' });
+  assert.deepEqual(refreshed.models.map((m) => m.slug), ['gpt-6.3-sol']);
+  assert.equal(upstreamCalls, 2);
+  assert.equal(resolveModelSelection('gpt-6.2-sol', registry).route.auth_mode, 'openai_passthrough');
+});
+
+test('ChatGPT manual metadata overrides survive live discovery without pinning a model name', async () => {
+  const registry = createProviderRegistry({
+    config: {
+      providers: {
+        chatgpt: {
+          enabled: true,
+          base_url: 'https://chatgpt.example/codex',
+          auth_mode: 'openai_passthrough',
+          protocol: 'responses',
+          discover_models: true,
+          model_prefix: 'chatgpt/',
+          compat_profile: 'openai',
+          metadata_profile: 'openai',
+          models: {},
+          model_overrides: {
+            'gpt-fixture': {
+              metadata: { tool_mode: null, use_responses_lite: false },
+            },
+          },
+        },
+      },
+    },
+    logger,
+    discoveryFetchModels: async () => ({
+      models: [
+        {
+          slug: 'gpt-fixture',
+          tool_mode: 'code_mode_only',
+          use_responses_lite: true,
+          context_window: 512000,
+        },
+      ],
+    }),
+  });
+  let payload;
   await sendModelList({}, registry, (_, status, body) => {
     assert.equal(status, 200);
-    catalog = body;
-  });
-  assert.ok(catalog.models.some((model) => model.slug === 'gpt-6.2-sol'));
-  assert.ok(catalog.data.some((model) => model.id === 'gpt-6.2-sol'));
-  assert.equal(resolveModelSelection('gpt-6.2-sol', registry).route.auth_mode, 'openai_passthrough');
+    payload = body;
+  }, { authorization: 'Bearer fixture-token' });
+  assert.deepEqual(payload.models.map((m) => m.slug), ['gpt-fixture']);
+  assert.equal(payload.models[0].tool_mode, null);
+  assert.equal(payload.models[0].use_responses_lite, false);
+  assert.equal(payload.models[0].context_window, 512000);
 });
 
 async function withSelectionFile(fn) {
@@ -156,7 +216,7 @@ test('discovery and model picker share a selection, hidden models stay routable'
   });
 });
 
-test('ChatGPT passthrough stays selectable without stars or login; only third-party models use favorites', async () => {
+test('ChatGPT passthrough uses authenticated live catalog and excludes favorites', async () => {
   await withSelectionFile(async (file) => {
     fs.writeFileSync(file, '* ds/selected\n  ds/hidden\n');
     const registry = createProviderRegistry({
@@ -191,7 +251,7 @@ test('ChatGPT passthrough stays selectable without stars or login; only third-pa
     };
     const withoutAuth = await response({});
     assert.deepEqual(withoutAuth.data.map((model) => model.id), [
-      'gpt-6.1-sol', 'gpt-6-astra', 'ds/selected',
+      'ds/selected',
     ]);
     assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /chatgpt\/|gpt-6/);
     assert.equal(resolveModelSelection('gpt-6.1-sol', registry).route.auth_mode, 'openai_passthrough');
@@ -199,7 +259,7 @@ test('ChatGPT passthrough stays selectable without stars or login; only third-pa
 
     const withAuth = await response({ authorization: 'Bearer test-user-token' });
     assert.deepEqual(withAuth.data.map((model) => model.id), [
-      'gpt-6.1-sol', 'gpt-6-astra', 'gpt-new-sol', 'ds/selected',
+      'gpt-6.1-sol', 'gpt-new-sol', 'ds/selected',
     ]);
     assert.equal(withAuth.models[0].display_name, 'GPT 6.1 Sol');
     assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /chatgpt\/|gpt-new/);

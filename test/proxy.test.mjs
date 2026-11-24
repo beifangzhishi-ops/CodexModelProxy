@@ -359,7 +359,7 @@ test('bare GPT passthrough forwards unchanged model and ChatGPT credentials with
         auth_mode: 'openai_passthrough',
         protocol: 'responses',
         model_prefix: 'chatgpt/',
-        discover_models: true,
+        discover_models: false,
         compat_profile: 'openai',
         metadata_profile: 'openai',
         models: { 'gpt-fixture-sol': {} },
@@ -1264,15 +1264,12 @@ test('上游错误状态、响应头和正文保持不变', async () => {
   });
 });
 
-test('production config pins GPT passthrough models separately and discovers third-party models', () => {
+test('production config discovers GPT passthrough and third-party models without pinned inventories', () => {
   const config = loadConfig();
   assert.equal(config.expose_canonical_models, false);
   assert.deepEqual(Object.keys(config.models), []);
   assert.deepEqual(Object.keys(config.aliases), []);
-  assert.deepEqual(Object.keys(config.providers.chatgpt.models), [
-    'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-sol',
-    'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
-  ]);
+  assert.deepEqual(config.providers.chatgpt.models, {});
   for (const name of ['deepseek', 'opencode', 'zai', 'kimi']) {
     assert.equal(config.providers[name].discover_models, true);
     assert.deepEqual(config.providers[name].models, {});

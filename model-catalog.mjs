@@ -21,26 +21,30 @@ export async function sendModelList(res, registry, sendJson, context = {}, selec
   };
   const passthrough = registry.getProvider('chatgpt');
   const hasPassthrough = passthrough?.enabled === true && passthrough.auth_mode === 'openai_passthrough';
-  const fixedPassthrough = new Map();
+  const passthroughModels = new Map();
   if (hasPassthrough) {
-    for (const [canonical, entry] of registry.configuredStaticModels) {
-      if (entry.provider.id !== passthrough.id || entry.spec.enabled === false || !entry.modelName.startsWith('gpt-')) continue;
-      fixedPassthrough.set(entry.modelName, null);
+    // A configured, explicitly disabled discovery may use a manual catalog.
+    // In the normal discovery-on mode the authenticated upstream is the
+    // exclusive source of visible ChatGPT models. Never merge stale pinned
+    // names into the live catalog, or they become impossible to retire.
+    if (passthrough.discover_models === false) {
+      for (const entry of registry.configuredStaticModels.values()) {
+        if (entry.provider.id !== passthrough.id || entry.spec.enabled === false || !entry.modelName.startsWith('gpt-')) continue;
+        passthroughModels.set(entry.modelName, null);
+      }
     }
-    // Live ChatGPT metadata may enrich the fixed entries, but never removes
-    // them when a catalog request has no login credentials.
     for (const model of dynamicModels) {
       if (model.provider_id !== passthrough.id || !model.upstream_model?.startsWith('gpt-')) continue;
-      fixedPassthrough.set(model.upstream_model, model);
+      passthroughModels.set(model.upstream_model, model);
     }
   }
-  const passthroughData = [...fixedPassthrough].map(([modelName, live]) => ({
+  const passthroughData = [...passthroughModels].map(([modelName, live]) => ({
     ...(live || {}),
     id: modelName,
     object: 'model',
     owned_by: 'chatgpt',
   }));
-  const passthroughCatalog = [...fixedPassthrough].map(([modelName, live], index) => {
+  const passthroughCatalog = [...passthroughModels].map(([modelName, live], index) => {
     const spec = registry.getConfiguredStaticModel(`${passthrough.model_prefix}${modelName}`)?.spec || {};
     const template = findLegacyCatalogTemplate(registry.config, modelName, modelName);
     return buildCatalogModel({
