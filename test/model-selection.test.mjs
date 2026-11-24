@@ -10,6 +10,30 @@ import { resolveModelSelection } from '../model-resolver.mjs';
 
 const logger = { info() {}, warn() {}, error() {} };
 
+test('released GPT-6.2 Sol remains in the real ChatGPT passthrough catalog without request OAuth', async () => {
+  const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const config = JSON.parse(fs.readFileSync(path.join(projectRoot, 'proxy-config.json'), 'utf8'));
+  const chatgpt = config.providers.chatgpt;
+  assert.ok(Object.hasOwn(chatgpt.models, 'gpt-6.2-sol'));
+  const registry = createProviderRegistry({
+    config: { providers: { chatgpt } },
+    localConfig: { providers: {} },
+    env: {},
+    secrets: {},
+    logger,
+    validateCredentials: false,
+    discoveryFetchModels: async () => ({ models: [{ slug: 'gpt-6.2-sol' }] }),
+  });
+  let catalog;
+  await sendModelList({}, registry, (_, status, body) => {
+    assert.equal(status, 200);
+    catalog = body;
+  });
+  assert.ok(catalog.models.some((model) => model.slug === 'gpt-6.2-sol'));
+  assert.ok(catalog.data.some((model) => model.id === 'gpt-6.2-sol'));
+  assert.equal(resolveModelSelection('gpt-6.2-sol', registry).route.auth_mode, 'openai_passthrough');
+});
+
 async function withSelectionFile(fn) {
   const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '.selection-check-');
   fs.mkdirSync(root, { recursive: true });

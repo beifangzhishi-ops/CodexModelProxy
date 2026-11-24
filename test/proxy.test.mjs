@@ -1270,7 +1270,7 @@ test('production config pins GPT passthrough models separately and discovers thi
   assert.deepEqual(Object.keys(config.models), []);
   assert.deepEqual(Object.keys(config.aliases), []);
   assert.deepEqual(Object.keys(config.providers.chatgpt.models), [
-    'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-sol',
+    'gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-sol',
     'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
   ]);
   for (const name of ['deepseek', 'opencode', 'zai', 'kimi']) {
